@@ -1,3 +1,48 @@
+// KV quota fix: TTL caches and request bookkeeping use existing D1.
+const SZ_STORE_REV = "kv-d1-20261004";
+const szWrappedEnvs = new WeakMap();
+function szTransientKey(k) {
+ return /^(?:cbz_budget_|cbz_rl$|cbz_map$|cbz_fb_at$|tap_v3_|chat_rl_|chat_day_|sc_c_|comm_c|md_c_|md_cb_|md_f_|wx2_|sq_|ovr_|ser_|rank_|player_|fd_|espn_sb_|espn_sum_|espn_gsum_)/.test(k) || k === "cricket_cbz" || k === "series_map";
+}
+function szSameValue(a,b) {
+ if(a===b) return true;
+ try {
+  const x=JSON.parse(a),y=JSON.parse(b);
+  if(x && y && typeof x==="object" && typeof y==="object") {
+   delete x.at;delete y.at;
+   return JSON.stringify(x)===JSON.stringify(y);
+  }
+ } catch {}
+ return false;
+}
+function szQuotaEnv(env) {
+ if(!env.DB || !env.SPORTS_KV) return env;
+ if(szWrappedEnvs.has(env)) return szWrappedEnvs.get(env);
+ const kv=env.SPORTS_KV,db=env.DB;
+ const proxy={
+  async get(key,type) {
+   if(!szTransientKey(key)) return kv.get(key,type);
+   const row=await db.prepare("SELECT value,expires_at FROM sz_kv_cache WHERE key=?").bind(key).first();
+   if(row) {
+    if(row.expires_at && row.expires_at <= Date.now()) return null;
+    return (type==="json"||type?.type==="json")?JSON.parse(row.value):row.value;
+   }
+   return kv.get(key,type); // legacy entries remain readable, never bulk-delete
+  },
+  async put(key,value,opts={}) {
+   if(szTransientKey(key)) {
+    const expires=opts.expiration ? opts.expiration*1000 : opts.expirationTtl ? Date.now()+opts.expirationTtl*1000 : 0;
+    await db.prepare("INSERT INTO sz_kv_cache(key,value,expires_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,expires_at=excluded.expires_at").bind(key,value,expires).run();
+    return;
+   }
+   const before=await kv.get(key);
+   if(szSameValue(before,value)) return;
+   return kv.put(key,value,opts);
+  },
+  list:kv.list.bind(kv), delete:kv.delete.bind(kv)
+ };
+ const out={...env,SPORTS_KV:proxy}; szWrappedEnvs.set(env,out);szWrappedEnvs.set(out,out);return out;
+}
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -14,8 +59,12 @@ var __defProp22222 = Object.defineProperty;
 var __name22222 = /* @__PURE__ */ __name2222((target, value) => __defProp22222(target, "name", { value, configurable: true }), "__name");
 var __defProp222222 = Object.defineProperty;
 var __name222222 = /* @__PURE__ */ __name22222((target, value) => __defProp222222(target, "name", { value, configurable: true }), "__name");
+var __defProp2222222 = Object.defineProperty;
+var __name2222222 = /* @__PURE__ */ __name222222((target, value) => __defProp2222222(target, "name", { value, configurable: true }), "__name");
+var __defProp22222222 = Object.defineProperty;
+var __name22222222 = /* @__PURE__ */ __name2222222((target, value) => __defProp22222222(target, "name", { value, configurable: true }), "__name");
 var __szRawFetch = globalThis.fetch;
-globalThis.fetch = __name222222(function(input, init) {
+globalThis.fetch = __name22222222(function(input, init) {
   if (init && init.signal) return __szRawFetch(input, init);
   var c = new AbortController();
   var t = setTimeout(function() {
@@ -28,7 +77,8 @@ globalThis.fetch = __name222222(function(input, init) {
 var CRIC_API = "https://api.cricapi.com/v1";
 var FOOT_API = "https://api.football-data.org/v4";
 var CBZ_API = "https://cricbuzz-cricket.p.rapidapi.com";
-var ESPN_API = "https://site.web.api.espn.com/apis/site/v2/sports";
+var ESPN_API = "https://site.api.espn.com/apis/site/v2/sports";
+var ESPN_TENNIS_API = "https://site.api.espn.com/apis/site/v2/sports";
 var ESPN_SPORTS = [
   { key: "nba", path: "basketball/nba", label: "NBA", icon: "\u{1F3C0}", kind: "events" },
   { key: "mlb", path: "baseball/mlb", label: "MLB", icon: "\u26BE", kind: "events" },
@@ -72,6 +122,8 @@ __name222(html, "html");
 __name2222(html, "html");
 __name22222(html, "html");
 __name222222(html, "html");
+__name2222222(html, "html");
+__name22222222(html, "html");
 function norm(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -82,6 +134,8 @@ __name222(norm, "norm");
 __name2222(norm, "norm");
 __name22222(norm, "norm");
 __name222222(norm, "norm");
+__name2222222(norm, "norm");
+__name22222222(norm, "norm");
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extraHeaders } });
 }
@@ -92,6 +146,8 @@ __name222(json, "json");
 __name2222(json, "json");
 __name22222(json, "json");
 __name222222(json, "json");
+__name2222222(json, "json");
+__name22222222(json, "json");
 var SW_JS = `const C='sz-v1';
 self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/manifest.webmanifest','/icon-192.png','/icon-512.png'])).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
@@ -121,6 +177,8 @@ __name222(b64ToBytes, "b64ToBytes");
 __name2222(b64ToBytes, "b64ToBytes");
 __name22222(b64ToBytes, "b64ToBytes");
 __name222222(b64ToBytes, "b64ToBytes");
+__name2222222(b64ToBytes, "b64ToBytes");
+__name22222222(b64ToBytes, "b64ToBytes");
 async function szFastJson(url, headers, ttl, ms) {
   const ctrl = new AbortController();
   const tm = setTimeout(() => ctrl.abort(), ms || 2500);
@@ -134,17 +192,22 @@ async function szFastJson(url, headers, ttl, ms) {
     clearTimeout(tm);
   }
 }
+__name(szFastJson, "szFastJson");
+__name2(szFastJson, "szFastJson");
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
-  const started = (m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5;
+  const started = /* @__PURE__ */ __name2((m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5, "started");
   const jobs = [];
+  [...c2.matches || [], ...f2.matches || [], ...Object.values(espnBlobs).flatMap((b) => b.matches || [])].forEach((m) => delete m.celebrationVerifiedAt);
   const cua = { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "application/json" };
   const liveC = (c2.matches || []).filter((m) => String(m.id).startsWith("cbz_") && m.status !== "finished" && (!m.start || new Date(m.start).getTime() <= now)).slice(0, 12);
   for (const m of liveC) {
     jobs.push((async () => {
-      const d = await szFastJson("https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4), cua, 10, 2500);
+      const d = await szFastJson("https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4), cua, 3, 2500);
       const s = d ? cbzMiniScorecard(d) : null;
       if (s) {
+        m.celebrationVerifiedAt = Date.now();
+        m.celebrationInnings = s.innings.map((i, n) => ({ key: i.team + ":" + n, team: i.team, r: i.runs, w: i.wkts, bats: (i.batsmen || []).map((b) => ({ id: b.id || b.name, name: b.name, r: b.r, f: b.f, s: b.s })) }));
         const prevText = m.statusText;
         const prevScores = m.scores;
         if (Array.isArray(s.innings) && s.innings.length) m.scores = [];
@@ -171,12 +234,13 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
         if (String(m.id).startsWith(pre)) ev = sb.events.find((e) => String(e.id) === String(m.id).slice(pre.length));
         if (!ev) {
           const hn = norm(m.home && m.home.name), an = norm(m.away && m.away.name);
-          const hit = (e, n) => (((e.competitions || [])[0] || {}).competitors || []).some((c) => [c.team?.displayName, c.team?.shortDisplayName, c.team?.name].map(norm).some((y) => y && n && (n.includes(y) || y.includes(n))));
+          const hit = /* @__PURE__ */ __name2((e, n) => (((e.competitions || [])[0] || {}).competitors || []).some((c) => [c.team?.displayName, c.team?.shortDisplayName, c.team?.name].map(norm).some((y) => y && n && (n.includes(y) || y.includes(n)))), "hit");
           ev = sb.events.find((e) => hit(e, hn) && hit(e, an));
         }
         if (!ev) continue;
         const mm = espnEventToMatch("football", "soccer/" + slug, "", ev, "");
         if (mm.status === "upcoming") continue;
+        m.celebrationVerifiedAt = Date.now();
         m.status = mm.status;
         if (mm.statusText) m.statusText = mm.statusText;
         if (String(m.id).startsWith(pre)) {
@@ -203,8 +267,8 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
           const out = [];
           for (const p of [spec.path, spec.also]) {
             if (!p) continue;
-            const d = await szFastJson(`${ESPN_API}/${p}/scoreboard`, ua, 15, 2500);
-            if (d) out.push(...espnTennisToMatches(p, d));
+            const d2 = await szFastJson(`${ESPN_API}/${p}/scoreboard`, ua, 15, 2500);
+            if (d2) out.push(...espnTennisToMatches(p, d2).map((m) => ({ ...m, celebrationVerifiedAt: Date.now() })));
           }
           if (!out.length) return;
           const rank = { live: 0, upcoming: 1, finished: 2 };
@@ -214,7 +278,7 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
         const d = await szFastJson(`${ESPN_API}/${spec.path}/scoreboard`, ua, 15, 2500);
         if (!d) return;
         const fresh = spec.kind === "f1" ? espnF1ToMatches(spec.path, d) : (d.events || []).map((e) => espnEventToMatch(spec.key, spec.path, spec.icon, e, d.leagues?.[0]?.name));
-        if (fresh && fresh.length) blob.matches = fresh;
+        if (fresh && fresh.length) blob.matches = fresh.map((m) => ({ ...m, celebrationVerifiedAt: Date.now() }));
       } catch (e) {
       }
     })());
@@ -222,6 +286,8 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
   await Promise.all(jobs);
   return now;
 }
+__name(szLiveOverlay, "szLiveOverlay");
+__name2(szLiveOverlay, "szLiveOverlay");
 async function readKV(env, key, fallback) {
   if (!env.SPORTS_KV) return fallback;
   const v = await env.SPORTS_KV.get(key, "json");
@@ -234,6 +300,8 @@ __name222(readKV, "readKV");
 __name2222(readKV, "readKV");
 __name22222(readKV, "readKV");
 __name222222(readKV, "readKV");
+__name2222222(readKV, "readKV");
+__name22222222(readKV, "readKV");
 var CBZ_IMG = "https://www.cricbuzz.com/a/img/v1/152x152/i1/c";
 function cbzExtractMatches(text) {
   const out = [];
@@ -244,26 +312,41 @@ function cbzExtractMatches(text) {
   const seen = {};
   while ((i = text.indexOf(key, i)) !== -1 && guard++ < 400) {
     const pk = /matchId\\?":(\d+)/.exec(text.slice(i, i + 80));
-    if (pk && seen[pk[1]]) { i += key.length; continue; }
+    if (pk && seen[pk[1]]) {
+      i += key.length;
+      continue;
+    }
     let depth = 0, j = i;
-    const lim = Math.min(text.length, i + 20000);
+    const lim = Math.min(text.length, i + 2e4);
     for (; j < lim; j++) {
       const c = text.charCodeAt(j);
       if (c === 123) depth++;
-      else if (c === 125) { depth--; if (depth === 0) break; }
+      else if (c === 125) {
+        depth--;
+        if (depth === 0) break;
+      }
     }
     if (depth === 0) {
       let seg = text.slice(i, j + 1);
-      if (escd) seg = seg.replace(/\\\\/g, "\u0001").replace(/\\"/g, '"').replace(/\u0001/g, "\\");
-      try { const o = JSON.parse(seg); if (o && o.matchInfo && o.matchInfo.matchId) { seen[o.matchInfo.matchId] = 1; out.push(o); } } catch (e) {}
+      if (escd) seg = seg.replace(/\\\\/g, "").replace(/\\"/g, '"').replace(/\u0001/g, "\\");
+      try {
+        const o = JSON.parse(seg);
+        if (o && o.matchInfo && o.matchInfo.matchId) {
+          seen[o.matchInfo.matchId] = 1;
+          out.push(o);
+        }
+      } catch (e) {
+      }
     }
     i = j + 1;
   }
   return out;
 }
+__name(cbzExtractMatches, "cbzExtractMatches");
+__name2(cbzExtractMatches, "cbzExtractMatches");
 async function cbzFreeList() {
   const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
-  const get = async (u) => {
+  const get = /* @__PURE__ */ __name2(async (u) => {
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 8e3);
@@ -273,12 +356,14 @@ async function cbzFreeList() {
     } catch (e) {
       return "";
     }
-  };
+  }, "get");
   const [home, ls] = await Promise.all([get("https://m.cricbuzz.com/api/home"), get("https://www.cricbuzz.com/cricket-match/live-scores")]);
   const matches = cbzExtractMatches(home).concat(cbzExtractMatches(ls));
   console.log("cbz free list:", matches.length, "matches");
   return matches.length ? { typeMatches: [{ seriesMatches: [{ matches }] }] } : null;
 }
+__name(cbzFreeList, "cbzFreeList");
+__name2(cbzFreeList, "cbzFreeList");
 async function fetchCricketCbz(env) {
   let live = await cbzFreeList().catch(() => null);
   let up = null;
@@ -288,7 +373,7 @@ async function fetchCricketCbz(env) {
   }
   const out = [];
   const seen = {};
-  const eat = /* @__PURE__ */ __name22222((d, liveDefault) => {
+  const eat = /* @__PURE__ */ __name2222222((d, liveDefault) => {
     for (const tm of d && d.typeMatches || []) {
       for (const sm of tm.seriesMatches || []) {
         const wrap = sm.seriesAdWrapper || sm;
@@ -303,7 +388,7 @@ async function fetchCricketCbz(env) {
           const isFin = st.includes("complete");
           const scores = [];
           const ms = m.matchScore || {};
-          const pushInn = /* @__PURE__ */ __name22222((sname, inn) => {
+          const pushInn = /* @__PURE__ */ __name2222222((sname, inn) => {
             ["inngs1", "inngs2"].forEach((k, i) => {
               const x = inn && inn[k];
               if (x && x.runs != null) scores.push({ inning: sname + " " + (i + 1), value: x.runs + "/" + (x.wickets != null ? x.wickets : 0) + " (" + x.overs + ")" });
@@ -332,7 +417,7 @@ async function fetchCricketCbz(env) {
   }, "eat");
   eat(live, true);
   eat(up, false);
-  const rank = /* @__PURE__ */ __name22222((m) => m.status === "live" ? 0 : m.status === "upcoming" ? 1 : 2, "rank");
+  const rank = /* @__PURE__ */ __name2222222((m) => m.status === "live" ? 0 : m.status === "upcoming" ? 1 : 2, "rank");
   out.sort((a, b) => rank(a) - rank(b) || String(a.start || "").localeCompare(String(b.start || "")));
   return out.slice(0, 60);
 }
@@ -343,20 +428,28 @@ __name222(fetchCricketCbz, "fetchCricketCbz");
 __name2222(fetchCricketCbz, "fetchCricketCbz");
 __name22222(fetchCricketCbz, "fetchCricketCbz");
 __name222222(fetchCricketCbz, "fetchCricketCbz");
+__name2222222(fetchCricketCbz, "fetchCricketCbz");
+__name22222222(fetchCricketCbz, "fetchCricketCbz");
 function czTeamKey(t) {
   const n = String(t && t.name || t || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, " ").trim();
   return n;
 }
+__name(czTeamKey, "czTeamKey");
+__name2(czTeamKey, "czTeamKey");
 function czFixtureTeams(m) {
   return [czTeamKey(m.home), czTeamKey(m.away)].sort().join("|");
 }
+__name(czFixtureTeams, "czFixtureTeams");
+__name2(czFixtureTeams, "czFixtureTeams");
 function czMatchNo(m) {
   const x = /(\d+)(?:st|nd|rd|th)\s+(?:Match|ODI|T20I?|Test|unofficial)/i.exec(String(m.title || ""));
   return x ? x[1] : null;
 }
+__name(czMatchNo, "czMatchNo");
+__name2(czMatchNo, "czMatchNo");
 function dedupeCricket(list) {
   const src = (list || []).filter(Boolean);
-  const isCbz = (m) => String(m.id).startsWith("cbz_");
+  const isCbz = /* @__PURE__ */ __name2((m) => String(m.id).startsWith("cbz_"), "isCbz");
   const kept = [];
   const seenIds = /* @__PURE__ */ new Set();
   const cbzByTeams = /* @__PURE__ */ new Map();
@@ -368,7 +461,7 @@ function dedupeCricket(list) {
     if (!cbzByTeams.has(tk)) cbzByTeams.set(tk, []);
     cbzByTeams.get(tk).push(m);
   }
-  const toMs = (v) => v ? Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(String(v)) ? v : v + "Z") : NaN;
+  const toMs = /* @__PURE__ */ __name2((v) => v ? Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(String(v)) ? v : v + "Z") : NaN, "toMs");
   for (const m of src.filter((x) => !isCbz(x))) {
     if (seenIds.has(String(m.id))) continue;
     const tk = czFixtureTeams(m);
@@ -385,6 +478,8 @@ function dedupeCricket(list) {
   }
   return kept;
 }
+__name(dedupeCricket, "dedupeCricket");
+__name2(dedupeCricket, "dedupeCricket");
 async function fetchCricket(env) {
   const r = await fetch(`${CRIC_API}/currentMatches?apikey=${env.CRICKETDATA_KEY}&offset=0`);
   const j = await r.json();
@@ -417,6 +512,8 @@ __name222(fetchCricket, "fetchCricket");
 __name2222(fetchCricket, "fetchCricket");
 __name22222(fetchCricket, "fetchCricket");
 __name222222(fetchCricket, "fetchCricket");
+__name2222222(fetchCricket, "fetchCricket");
+__name22222222(fetchCricket, "fetchCricket");
 var FOOT_COMPS = ["PL", "ELC", "BL1", "SA", "PD", "FL1", "DED", "PPL", "BSA", "CL"];
 var FOOT_ESPN_LEAGUES = [["uefa.nations", "UEFA Nations League"], ["fifa.friendly", "International Friendly"], ["fifa.worldq.uefa", "World Cup Qualifiers - UEFA"], ["fifa.worldq.afc", "World Cup Qualifiers - AFC"], ["fifa.worldq.conmebol", "World Cup Qualifiers - CONMEBOL"]];
 async function fetchFootball(env) {
@@ -434,26 +531,26 @@ async function fetchFootball(env) {
       for (const m of j && j.matches || []) {
         if (seenIds[m.id]) continue;
         seenIds[m.id] = 1;
-    const sc = m.score || {};
-    const ft = sc.fullTime || {};
-    out.push({
-      id: String(m.id),
-      sport: "football",
-      title: `${m.homeTeam?.name} vs ${m.awayTeam?.name}`,
-      home: { name: m.homeTeam?.name, short: m.homeTeam?.tla || m.homeTeam?.shortName, logo: m.homeTeam?.crest },
-      away: { name: m.awayTeam?.name, short: m.awayTeam?.tla || m.awayTeam?.shortName, logo: m.awayTeam?.crest },
-      status: m.status === "IN_PLAY" || m.status === "PAUSED" ? "live" : m.status === "FINISHED" ? "finished" : "upcoming",
-      statusText: m.status === "PAUSED" ? "Half-time" : m.status.replace(/_/g, " "),
-      scores: ft.home !== null && ft.home !== void 0 ? [{ inning: "", value: `${ft.home} - ${ft.away}` }] : [],
-      venue: m.venue,
-      start: m.utcDate,
-      matchType: m.competition?.name,
-      comp: m.competition?.code,
-      espnLeague: FOOT_TO_ESPN[(m.competition?.name || "").toLowerCase()] || null
-    });
-  }
+        const sc = m.score || {};
+        const ft = sc.fullTime || {};
+        out.push({
+          id: String(m.id),
+          sport: "football",
+          title: `${m.homeTeam?.name} vs ${m.awayTeam?.name}`,
+          home: { name: m.homeTeam?.name, short: m.homeTeam?.tla || m.homeTeam?.shortName, logo: m.homeTeam?.crest },
+          away: { name: m.awayTeam?.name, short: m.awayTeam?.tla || m.awayTeam?.shortName, logo: m.awayTeam?.crest },
+          status: m.status === "IN_PLAY" || m.status === "PAUSED" ? "live" : m.status === "FINISHED" ? "finished" : "upcoming",
+          statusText: m.status === "PAUSED" ? "Half-time" : m.status.replace(/_/g, " "),
+          scores: ft.home !== null && ft.home !== void 0 ? [{ inning: "", value: `${ft.home} - ${ft.away}` }] : [],
+          venue: m.venue,
+          start: m.utcDate,
+          matchType: m.competition?.name,
+          comp: m.competition?.code,
+          espnLeague: FOOT_TO_ESPN[(m.competition?.name || "").toLowerCase()] || null
+        });
       }
     }
+  }
   for (const [lg, label] of FOOT_ESPN_LEAGUES) {
     try {
       const r3 = await fetch(`${ESPN_API}/soccer/${lg}/scoreboard`, { headers: { "User-Agent": "Mozilla/5.0 (ScoreZaap)" } });
@@ -481,6 +578,8 @@ __name222(fetchFootball, "fetchFootball");
 __name2222(fetchFootball, "fetchFootball");
 __name22222(fetchFootball, "fetchFootball");
 __name222222(fetchFootball, "fetchFootball");
+__name2222222(fetchFootball, "fetchFootball");
+__name22222222(fetchFootball, "fetchFootball");
 function espnEventToMatch(sport, leagueLabel, icon, e, extraLeague) {
   const c = (e.competitions || [])[0] || {};
   const comps = c.competitors || [];
@@ -488,7 +587,7 @@ function espnEventToMatch(sport, leagueLabel, icon, e, extraLeague) {
   const away = comps.find((x) => x.homeAway === "away") || comps[1] || {};
   const st = c.status?.type || {};
   const status = st.completed ? "finished" : st.state === "in" ? "live" : "upcoming";
-  const t = /* @__PURE__ */ __name222222((x) => x.team || {}, "t");
+  const t = /* @__PURE__ */ __name22222222((x) => x.team || {}, "t");
   return {
     id: `${leagueLabel}:${e.id}`,
     sport,
@@ -496,6 +595,7 @@ function espnEventToMatch(sport, leagueLabel, icon, e, extraLeague) {
     home: { name: t(home).displayName, short: t(home).abbreviation, logo: t(home).logo },
     away: { name: t(away).displayName, short: t(away).abbreviation, logo: t(away).logo },
     status,
+    celebrationWinner: comps.find((x) => x.winner)?.team?.displayName || null,
     statusText: st.shortDetail || st.detail || st.description,
     scores: comps.length >= 2 && status !== "upcoming" ? [{ inning: "", value: `${t(home).abbreviation || ""} ${home.score || 0} - ${away.score || 0} ${t(away).abbreviation || ""}` }] : [],
     venue: c.venue?.fullName,
@@ -510,6 +610,8 @@ __name222(espnEventToMatch, "espnEventToMatch");
 __name2222(espnEventToMatch, "espnEventToMatch");
 __name22222(espnEventToMatch, "espnEventToMatch");
 __name222222(espnEventToMatch, "espnEventToMatch");
+__name2222222(espnEventToMatch, "espnEventToMatch");
+__name22222222(espnEventToMatch, "espnEventToMatch");
 function espnTennisToMatches(label, d) {
   const out = [];
   for (const e of d.events || []) {
@@ -520,8 +622,8 @@ function espnTennisToMatches(label, d) {
         const comps = (c.competitors || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
         if (comps.length < 2) continue;
         if (comps.some((x) => /TBD|TBA/i.test(x.athlete?.displayName || ""))) continue;
-        const nm = /* @__PURE__ */ __name222222((x) => x.athlete?.displayName || x.athlete?.shortName || "?", "nm");
-        const short = /* @__PURE__ */ __name222222((x) => {
+        const nm = /* @__PURE__ */ __name22222222((x) => x.athlete?.displayName || x.athlete?.shortName || "?", "nm");
+        const short = /* @__PURE__ */ __name22222222((x) => {
           const n = nm(x).split(" ");
           return (n[n.length - 1] || "?").slice(0, 10);
         }, "short");
@@ -530,6 +632,7 @@ function espnTennisToMatches(label, d) {
         out.push({
           id: `${label}:${c.id}`,
           sport: "tennis",
+          celebrationWinner: comps.find((x) => x.winner)?.athlete?.displayName || null,
           title: `${nm(comps[0])} vs ${nm(comps[1])}`,
           home: { name: nm(comps[0]), short: short(comps[0]) },
           away: { name: nm(comps[1]), short: short(comps[1]) },
@@ -552,11 +655,16 @@ __name222(espnTennisToMatches, "espnTennisToMatches");
 __name2222(espnTennisToMatches, "espnTennisToMatches");
 __name22222(espnTennisToMatches, "espnTennisToMatches");
 __name222222(espnTennisToMatches, "espnTennisToMatches");
+__name2222222(espnTennisToMatches, "espnTennisToMatches");
+__name22222222(espnTennisToMatches, "espnTennisToMatches");
 function espnF1ToMatches(label, d) {
   return (d.events || []).map((e) => {
-    const sessions = (e.competitions || []).map((c) => ({ name: c.type?.text || "Session", start: c.date, status: c.status?.type?.shortDetail }));
-    const race = sessions[sessions.length - 1] || {};
+    const competitions = e.competitions || [];
+    const sessions = competitions.map((c) => ({ name: c.type?.text || "Session", start: c.date, status: c.status?.type?.shortDetail }));
+    const race = competitions.find((c) => c.type?.abbreviation === "Race" || String(c.type?.id) === "3") || competitions[competitions.length - 1] || {};
     const st = e.status?.type || {};
+    const raceDone = !!race.status?.type?.completed;
+    const resultRows = raceDone ? (race.competitors || []).filter((c) => Number.isInteger(Number(c.order)) && (c.athlete?.displayName || c.athlete?.fullName)).sort((a, b) => Number(a.order) - Number(b.order)).slice(0, 5).map((c) => ({ place: Number(c.order), driver: String(c.athlete.displayName || c.athlete.fullName).slice(0, 80) })) : [];
     return {
       id: `${label}:${e.id}`,
       sport: "f1",
@@ -564,8 +672,9 @@ function espnF1ToMatches(label, d) {
       home: { name: e.circuit?.fullName || "Circuit", short: "GP" },
       away: { name: "", short: "" },
       status: st.completed ? "finished" : st.state === "in" ? "live" : "upcoming",
-      statusText: st.shortDetail || race.status || "",
+      statusText: st.shortDetail || st.detail || race.status?.type?.shortDetail || "",
       scores: [],
+      resultRows,
       venue: e.circuit?.fullName,
       start: e.date,
       matchType: "Formula 1",
@@ -580,17 +689,34 @@ __name222(espnF1ToMatches, "espnF1ToMatches");
 __name2222(espnF1ToMatches, "espnF1ToMatches");
 __name22222(espnF1ToMatches, "espnF1ToMatches");
 __name222222(espnF1ToMatches, "espnF1ToMatches");
-async function fetchEspnSport(spec) {
+__name2222222(espnF1ToMatches, "espnF1ToMatches");
+__name22222222(espnF1ToMatches, "espnF1ToMatches");
+async function fetchEspnSport(spec, onTennisSource) {
   const ua = { "User-Agent": "Mozilla/5.0 (ScoreZaap)" };
   if (spec.kind === "tennis") {
     const out = [];
-    for (const p of [spec.path, spec.also]) {
+    const paths = [spec.path, spec.also].filter(Boolean);
+    let succeeded = 0, eventCount = 0;
+    for (const p of paths) {
+      const startedAt = Date.now();
+      let status = null;
       try {
-        const r2 = await fetch(`${ESPN_API}/${p}/scoreboard`, { headers: ua });
-        if (r2.ok) out.push(...espnTennisToMatches(p, await r2.json()));
+        const r2 = await fetch(`${ESPN_TENNIS_API}/${p}/scoreboard`, { headers: ua });
+        status = r2.status;
+        if (!r2.ok) throw new Error(`ESPN tennis ${p} ${r2.status}`);
+        const d = await r2.json();
+        if (!Array.isArray(d.events)) throw new Error(`ESPN tennis ${p} missing events`);
+        succeeded++;
+        eventCount += d.events.length;
+        out.push(...espnTennisToMatches(p, d));
+        onTennisSource?.({ path: p, ok: true, status, errorName: null, elapsedMs: Date.now() - startedAt });
       } catch (e) {
+        onTennisSource?.({ path: p, ok: false, status, errorName: String(e.name || "Error").slice(0, 50), elapsedMs: Date.now() - startedAt });
+        console.log("espn tennis source failed", p, String(e.name || "Error").slice(0, 50));
       }
     }
+    if (!paths.length || succeeded !== paths.length) throw new Error("ESPN tennis source set incomplete");
+    if (!out.length) throw new Error(eventCount ? "ESPN tennis events did not match expected singles format" : "ESPN tennis returned no singles matches");
     const rank = { live: 0, upcoming: 1, finished: 2 };
     return out.sort((a, b) => rank[a.status] - rank[b.status] || new Date(b.start) - new Date(a.start)).slice(0, 40);
   }
@@ -607,6 +733,14 @@ __name222(fetchEspnSport, "fetchEspnSport");
 __name2222(fetchEspnSport, "fetchEspnSport");
 __name22222(fetchEspnSport, "fetchEspnSport");
 __name222222(fetchEspnSport, "fetchEspnSport");
+__name2222222(fetchEspnSport, "fetchEspnSport");
+__name22222222(fetchEspnSport, "fetchEspnSport");
+function szNewsPublishedDate(value) {
+  const text = String(value || "").trim().replace(/\bBST\b/gi, "+0100");
+  const time = Date.parse(text);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+__name(szNewsPublishedDate, "szNewsPublishedDate");
 async function fetchNews() {
   const items = [];
   await Promise.all(NEWS_FEEDS.map(async (f) => {
@@ -615,19 +749,24 @@ async function fetchNews() {
       if (!r.ok) return;
       const xml = await r.text();
       const blocks = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-      for (const b of blocks.slice(0, 12)) {
-        const grab = /* @__PURE__ */ __name222222((tag) => {
+      for (const b of blocks.slice(0, 8)) {
+        const grab = /* @__PURE__ */ __name22222222((tag) => {
           const m = b.match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${tag}>`));
           return m ? html(m[1].trim()) : "";
         }, "grab");
         const title = grab("title"), link = grab("link"), pub = grab("pubDate");
+        const published = pub ? szNewsPublishedDate(pub) : null;
+        if (pub && !published) continue;
+        const rawDesc = grab("description").replace(/<!\[CDATA\[|\]\]>/g, "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
+        const articleDesc = /^Plus(?:,|:)/i.test(rawDesc) ? "" : rawDesc;
         const srcm = b.match(/<source[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/source>/);
         const th = b.match(/<media:thumbnail[^>]*url="([^"]+)"/) || b.match(/<enclosure[^>]*type="image[^"]*"[^>]*url="([^"]+)"/) || b.match(/<enclosure[^>]*url="([^"]+)"[^>]*type="image/);
         if (title && link) items.push({
           title,
           link,
           source: srcm ? html(srcm[1].trim()) : f.source,
-          published: pub ? new Date(pub).toISOString() : null,
+          published,
+          desc: articleDesc,
           thumb: th ? th[1].replace(/&amp;/g, "&") : null
         });
       }
@@ -649,6 +788,8 @@ __name222(fetchNews, "fetchNews");
 __name2222(fetchNews, "fetchNews");
 __name22222(fetchNews, "fetchNews");
 __name222222(fetchNews, "fetchNews");
+__name2222222(fetchNews, "fetchNews");
+__name22222222(fetchNews, "fetchNews");
 async function dbBatch(env, stmts) {
   for (let i = 0; i < stmts.length; i += 50) {
     try {
@@ -664,6 +805,8 @@ __name22(dbBatch, "dbBatch");
 __name222(dbBatch, "dbBatch");
 __name2222(dbBatch, "dbBatch");
 __name22222(dbBatch, "dbBatch");
+__name222222(dbBatch, "dbBatch");
+__name2222222(dbBatch, "dbBatch");
 async function dbUpsertMatches(env, sport, matches) {
   if (!env.DB || !matches || !matches.length) return;
   try {
@@ -688,6 +831,8 @@ __name22(dbUpsertMatches, "dbUpsertMatches");
 __name222(dbUpsertMatches, "dbUpsertMatches");
 __name2222(dbUpsertMatches, "dbUpsertMatches");
 __name22222(dbUpsertMatches, "dbUpsertMatches");
+__name222222(dbUpsertMatches, "dbUpsertMatches");
+__name2222222(dbUpsertMatches, "dbUpsertMatches");
 async function dbUpsertNews(env, items) {
   if (!env.DB || !items || !items.length) return;
   try {
@@ -708,6 +853,8 @@ __name22(dbUpsertNews, "dbUpsertNews");
 __name222(dbUpsertNews, "dbUpsertNews");
 __name2222(dbUpsertNews, "dbUpsertNews");
 __name22222(dbUpsertNews, "dbUpsertNews");
+__name222222(dbUpsertNews, "dbUpsertNews");
+__name2222222(dbUpsertNews, "dbUpsertNews");
 async function refresh(kind, env, ctx) {
   const kv = env.SPORTS_KV;
   if (!kv) return;
@@ -743,11 +890,21 @@ async function refresh(kind, env, ctx) {
     }),
     fetchNews().catch(() => null)
   ];
-  for (const spec of ESPN_SPORTS) jobs.push(fetchEspnSport(spec).catch((e) => {
+  let tennisSources = [];
+  let tennisFailure = null;
+  const tennisStartedAt = Date.now();
+  for (const spec of ESPN_SPORTS) jobs.push(fetchEspnSport(spec, spec.key === "tennis" ? (v) => tennisSources.push(v) : undefined).catch((e) => {
     console.log("espn fail", spec.key, e.message);
+    if (spec.key === "tennis") tennisFailure = { errorName: String(e.name || "Error").slice(0, 50), elapsedMs: tennisStartedAt == null ? null : Date.now() - tennisStartedAt };
     return null;
   }));
   let [cricket, news, ...espn] = await Promise.all(jobs);
+  try {
+    const tennisMatches = espn[3];
+    const diag = { cron: "scores", at: (/* @__PURE__ */ new Date()).toISOString(), sourceOk: Array.isArray(tennisMatches), matches: Array.isArray(tennisMatches) ? tennisMatches.length : null, sources: tennisSources, failure: tennisFailure };
+    await env.DB?.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind("cron_debug_tennis", JSON.stringify(diag), (/* @__PURE__ */ new Date()).toISOString()).run();
+  } catch (e) {
+  }
   try {
     let cbzSlice = kv ? await kv.get("cricket_cbz", "json").catch(() => null) : null;
     const sliceStale = !cbzSlice || !cbzSlice.at || Date.now() - +cbzSlice.at > 5 * 6e4;
@@ -782,7 +939,7 @@ async function refresh(kind, env, ctx) {
     if (cricket && cricket.length) {
       for (const lm of cricket.filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= Date.now())).slice(0, 8)) {
         try {
-          const better = /* @__PURE__ */ __name2222((cur2, idx2, val2) => {
+          const better = /* @__PURE__ */ __name222222((cur2, idx2, val2) => {
             const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
             if (!pm) return false;
             const cRuns = +pm[1], cOv = +pm[3];
@@ -867,6 +1024,8 @@ __name222(refresh, "refresh");
 __name2222(refresh, "refresh");
 __name22222(refresh, "refresh");
 __name222222(refresh, "refresh");
+__name2222222(refresh, "refresh");
+__name22222222(refresh, "refresh");
 var VAPID_PUB = "BB0akVmcYCoa7wNtm1h0i2QVJtKci7L4ez_XiJJedwZSu3ZZTw3Sc4VDStHsyLy6_2ueOHbi2TIMD3bFnspkflg";
 function b64urlBytes(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -878,6 +1037,8 @@ __name222(b64urlBytes, "b64urlBytes");
 __name2222(b64urlBytes, "b64urlBytes");
 __name22222(b64urlBytes, "b64urlBytes");
 __name222222(b64urlBytes, "b64urlBytes");
+__name2222222(b64urlBytes, "b64urlBytes");
+__name22222222(b64urlBytes, "b64urlBytes");
 async function vapidJwt(env, audience) {
   const key = await crypto.subtle.importKey(
     "jwk",
@@ -898,6 +1059,8 @@ __name222(vapidJwt, "vapidJwt");
 __name2222(vapidJwt, "vapidJwt");
 __name22222(vapidJwt, "vapidJwt");
 __name222222(vapidJwt, "vapidJwt");
+__name2222222(vapidJwt, "vapidJwt");
+__name22222222(vapidJwt, "vapidJwt");
 async function sendPushTickle(env, endpoint) {
   try {
     const aud = new URL(endpoint).origin;
@@ -915,6 +1078,8 @@ __name222(sendPushTickle, "sendPushTickle");
 __name2222(sendPushTickle, "sendPushTickle");
 __name22222(sendPushTickle, "sendPushTickle");
 __name222222(sendPushTickle, "sendPushTickle");
+__name2222222(sendPushTickle, "sendPushTickle");
+__name22222222(sendPushTickle, "sendPushTickle");
 async function subKey(endpoint) {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
   return "push_sub_" + [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
@@ -926,6 +1091,8 @@ __name222(subKey, "subKey");
 __name2222(subKey, "subKey");
 __name22222(subKey, "subKey");
 __name222222(subKey, "subKey");
+__name2222222(subKey, "subKey");
+__name22222222(subKey, "subKey");
 async function notifyMatch(env, ctx, sport, m, kindLabel) {
   if (!env.SPORTS_KV) return;
   const title = (m.home?.short || m.home?.name || "") + " vs " + (m.away?.short || m.away?.name || "");
@@ -953,6 +1120,8 @@ __name222(notifyMatch, "notifyMatch");
 __name2222(notifyMatch, "notifyMatch");
 __name22222(notifyMatch, "notifyMatch");
 __name222222(notifyMatch, "notifyMatch");
+__name2222222(notifyMatch, "notifyMatch");
+__name22222222(notifyMatch, "notifyMatch");
 async function detectTransitions(env, ctx, sport, oldList, newList) {
   if (!Array.isArray(oldList) || !Array.isArray(newList)) return;
   const prev = {};
@@ -971,6 +1140,8 @@ __name222(detectTransitions, "detectTransitions");
 __name2222(detectTransitions, "detectTransitions");
 __name22222(detectTransitions, "detectTransitions");
 __name222222(detectTransitions, "detectTransitions");
+__name2222222(detectTransitions, "detectTransitions");
+__name22222222(detectTransitions, "detectTransitions");
 async function cbzBudgetOk(env) {
   if (!env.SPORTS_KV) return false;
   const mk = "cbz_budget_" + (/* @__PURE__ */ new Date()).toISOString().slice(0, 7);
@@ -984,6 +1155,8 @@ __name222(cbzBudgetOk, "cbzBudgetOk");
 __name2222(cbzBudgetOk, "cbzBudgetOk");
 __name22222(cbzBudgetOk, "cbzBudgetOk");
 __name222222(cbzBudgetOk, "cbzBudgetOk");
+__name2222222(cbzBudgetOk, "cbzBudgetOk");
+__name22222222(cbzBudgetOk, "cbzBudgetOk");
 async function cbzFetch(env, path) {
   const mk = await cbzBudgetOk(env);
   if (!mk) return null;
@@ -1009,26 +1182,32 @@ __name222(cbzFetch, "cbzFetch");
 __name2222(cbzFetch, "cbzFetch");
 __name22222(cbzFetch, "cbzFetch");
 __name222222(cbzFetch, "cbzFetch");
+__name2222222(cbzFetch, "cbzFetch");
+__name22222222(cbzFetch, "cbzFetch");
 function cbzUnescape(s) {
-  return s.replace(/\\u([0-9a-fA-F]{4})/g, (m, c) => String.fromCharCode(parseInt(c, 16))).replace(/\\(.)/g, (m, c) => c === "n" ? "\n" : c === "t" ? "\t" : c);
+  return s.replace(/\\u([0-9a-fA-F]{4})/g, (m, c) => String.fromCharCode(parseInt(c, 16))).replace(/\\(.)/g, (m, c) => c === "n" ? "\n" : c === "t" ? "	" : c);
 }
-function cbzExtractJson(html, anchor) {
-  const i = html.indexOf(anchor);
+__name(cbzUnescape, "cbzUnescape");
+__name2(cbzUnescape, "cbzUnescape");
+function cbzExtractJson(html2, anchor) {
+  const i = html2.indexOf(anchor);
   if (i < 0) return null;
-  const j = html.indexOf("{", i);
+  const j = html2.indexOf("{", i);
   if (j < 0) return null;
   let depth = 0;
-  const end = Math.min(html.length, j + 8e5);
+  const end = Math.min(html2.length, j + 8e5);
   for (let k = j; k < end; k++) {
-    const c = html[k];
+    const c = html2[k];
     if (c === "{") depth++;
     else if (c === "}") {
       depth--;
-      if (!depth) return html.slice(j, k + 1);
+      if (!depth) return html2.slice(j, k + 1);
     }
   }
   return null;
 }
+__name(cbzExtractJson, "cbzExtractJson");
+__name2(cbzExtractJson, "cbzExtractJson");
 var CBZ_UA = { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" };
 async function cbzRankingsHtml(fmt, typ) {
   const cat = { batsmen: "batting", bowlers: "bowling", allrounders: "all-rounder", teams: "teams" }[typ];
@@ -1036,8 +1215,8 @@ async function cbzRankingsHtml(fmt, typ) {
   try {
     const r = await fetch(`https://www.cricbuzz.com/cricket-stats/icc-rankings/men/${cat}`, { headers: { ...CBZ_UA, "Accept": "text/html" } });
     if (!r.ok) return null;
-    const html = await r.text();
-    const raw = cbzExtractJson(html, '\\"formatTypesData\\":');
+    const html2 = await r.text();
+    const raw = cbzExtractJson(html2, '\\"formatTypesData\\":');
     if (!raw) return null;
     const d = JSON.parse(cbzUnescape(raw));
     const blk = d && d[fmt];
@@ -1055,12 +1234,14 @@ async function cbzRankingsHtml(fmt, typ) {
     return null;
   }
 }
+__name(cbzRankingsHtml, "cbzRankingsHtml");
+__name2(cbzRankingsHtml, "cbzRankingsHtml");
 async function cbzPlayerHtml(pid) {
   try {
     const r = await fetch(`https://www.cricbuzz.com/profiles/${pid}/x`, { headers: { ...CBZ_UA, "Accept": "text/html" } });
     if (!r.ok) return null;
-    const html = await r.text();
-    const raw = cbzExtractJson(html, '{\\"id\\":\\"' + pid + '\\"');
+    const html2 = await r.text();
+    const raw = cbzExtractJson(html2, '{\\"id\\":\\"' + pid + '\\"');
     if (!raw) return null;
     const d = JSON.parse(cbzUnescape(raw));
     if (!d || !d.name) return null;
@@ -1069,6 +1250,8 @@ async function cbzPlayerHtml(pid) {
     return null;
   }
 }
+__name(cbzPlayerHtml, "cbzPlayerHtml");
+__name2(cbzPlayerHtml, "cbzPlayerHtml");
 function cbzFingerprint(title) {
   const m = String(title || "").split(",")[0];
   const parts = m.split(/\s+vs\s+/i);
@@ -1082,6 +1265,8 @@ __name222(cbzFingerprint, "cbzFingerprint");
 __name2222(cbzFingerprint, "cbzFingerprint");
 __name22222(cbzFingerprint, "cbzFingerprint");
 __name222222(cbzFingerprint, "cbzFingerprint");
+__name2222222(cbzFingerprint, "cbzFingerprint");
+__name22222222(cbzFingerprint, "cbzFingerprint");
 async function cbzResolveMatchId(env, title, startIso) {
   if (!env.SPORTS_KV) return null;
   const fp = cbzFingerprint(title);
@@ -1099,7 +1284,7 @@ async function cbzResolveMatchId(env, title, startIso) {
     const nm = {};
     for (const l of lists) {
       if (!l) continue;
-      const walk = /* @__PURE__ */ __name222222((o) => {
+      const walk = /* @__PURE__ */ __name22222222((o) => {
         if (!o) return;
         if (Array.isArray(o)) return o.forEach(walk);
         if (typeof o === "object") {
@@ -1129,7 +1314,14 @@ __name222(cbzResolveMatchId, "cbzResolveMatchId");
 __name2222(cbzResolveMatchId, "cbzResolveMatchId");
 __name22222(cbzResolveMatchId, "cbzResolveMatchId");
 __name222222(cbzResolveMatchId, "cbzResolveMatchId");
+__name2222222(cbzResolveMatchId, "cbzResolveMatchId");
+__name22222222(cbzResolveMatchId, "cbzResolveMatchId");
 async function cbzScorecard(env, cricketId, title, startIso, live) {
+  if (live && String(cricketId).startsWith("cbz_")) {
+    const d2 = await szFastJson("https://m.cricbuzz.com/api/mcenter/scorecard/" + String(cricketId).slice(4), { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "application/json" }, 10, 2500);
+    const fresh = d2 ? cbzMiniScorecard(d2) : null;
+    if (fresh && fresh.innings && fresh.innings.length) return { ...fresh, celebrationVerifiedAt: Date.now() };
+  }
   const ck = "sc_c_" + cricketId;
   const hit = env.SPORTS_KV ? await env.SPORTS_KV.get(ck, "json") : null;
   if (hit) return hit;
@@ -1172,6 +1364,8 @@ __name222(cbzScorecard, "cbzScorecard");
 __name2222(cbzScorecard, "cbzScorecard");
 __name22222(cbzScorecard, "cbzScorecard");
 __name222222(cbzScorecard, "cbzScorecard");
+__name2222222(cbzScorecard, "cbzScorecard");
+__name22222222(cbzScorecard, "cbzScorecard");
 async function cbzCommentary(env, cricketId, title, startIso, live) {
   const ck = "comm_c2_" + cricketId;
   const hit = env.SPORTS_KV ? await env.SPORTS_KV.get(ck, "json") : null;
@@ -1219,6 +1413,8 @@ __name222(cbzCommentary, "cbzCommentary");
 __name2222(cbzCommentary, "cbzCommentary");
 __name22222(cbzCommentary, "cbzCommentary");
 __name222222(cbzCommentary, "cbzCommentary");
+__name2222222(cbzCommentary, "cbzCommentary");
+__name22222222(cbzCommentary, "cbzCommentary");
 async function espnSoccerTimeline(env, detail) {
   if (!detail.espnLeague && !detail.competition) return null;
   const slug = detail.espnLeague || FOOT_TO_ESPN[(detail.competition || "").toLowerCase()];
@@ -1238,10 +1434,10 @@ async function espnSoccerTimeline(env, detail) {
     }
   }
   const hn = norm(detail.home), an = norm(detail.away);
-  const matchTeams = /* @__PURE__ */ __name222222((e) => {
+  const matchTeams = /* @__PURE__ */ __name22222222((e) => {
     const comps2 = ((e.competitions || [])[0] || {}).competitors || [];
     const names = comps2.map((c) => norm(c.team?.displayName) + "|" + norm(c.team?.shortDisplayName) + "|" + norm(c.team?.name));
-    const hit = /* @__PURE__ */ __name222222((n) => names.some((x) => x.split("|").some((y) => y && n && (n.includes(y) || y.includes(n)))), "hit");
+    const hit = /* @__PURE__ */ __name22222222((n) => names.some((x) => x.split("|").some((y) => y && n && (n.includes(y) || y.includes(n)))), "hit");
     return hit(hn) && hit(an);
   }, "matchTeams");
   const ev = (sb.events || []).find(matchTeams);
@@ -1290,15 +1486,26 @@ __name222(espnSoccerTimeline, "espnSoccerTimeline");
 __name2222(espnSoccerTimeline, "espnSoccerTimeline");
 __name22222(espnSoccerTimeline, "espnSoccerTimeline");
 __name222222(espnSoccerTimeline, "espnSoccerTimeline");
+__name2222222(espnSoccerTimeline, "espnSoccerTimeline");
+__name22222222(espnSoccerTimeline, "espnSoccerTimeline");
 async function espnGenericDetail(env, id) {
   const [leaguePath, eventId] = String(id).split(":");
   if (!leaguePath || !eventId) return null;
   const specKey = leaguePath.split("/")[1];
   const kvKey = "espn_" + (specKey === "atp" || specKey === "wta" ? "tennis" : specKey);
   const list = await readKV(env, kvKey, { matches: [] });
-  const m = (list.matches || []).find((x) => x.id === id);
+  let m = (list.matches || []).find((x) => x.id === id);
+  const ua = { "User-Agent": "Mozilla/5.0 (ScoreZaap)" };
+  const sb = await szFastJson(`${ESPN_API}/${leaguePath}/scoreboard`, ua, 15, 2500);
+  if (sb) {
+    const candidates = specKey === "atp" || specKey === "wta" ? espnTennisToMatches(leaguePath, sb) : specKey === "f1" ? espnF1ToMatches(leaguePath, sb) : (sb.events || []).map((e) => espnEventToMatch(specKey, leaguePath, "", e, sb.leagues?.[0]?.name));
+    const fm = candidates.find((x) => x.id === id);
+    if (fm) m = { ...fm, celebrationVerifiedAt: Date.now() };
+  }
   if (!m) return null;
   const detail = {
+    celebrationVerifiedAt: m.celebrationVerifiedAt,
+    celebrationWinner: m.celebrationWinner,
     title: m.title,
     status: m.statusText || m.status,
     venue: m.venue,
@@ -1330,7 +1537,7 @@ async function espnGenericDetail(env, id) {
       detail.status = comp.status?.type?.shortDetail || detail.status;
       const comps = comp.competitors || [];
       const h = comps.find((x) => x.homeAway === "home"), a = comps.find((x) => x.homeAway === "away");
-      if (h && a) detail.bigScore = `${h.score || 0} - ${a.score || 0}`;
+      if (h && a && !m.celebrationVerifiedAt) detail.bigScore = `${h.score || 0} - ${a.score || 0}`;
     }
   }
   return detail;
@@ -1342,6 +1549,8 @@ __name222(espnGenericDetail, "espnGenericDetail");
 __name2222(espnGenericDetail, "espnGenericDetail");
 __name22222(espnGenericDetail, "espnGenericDetail");
 __name222222(espnGenericDetail, "espnGenericDetail");
+__name2222222(espnGenericDetail, "espnGenericDetail");
+__name22222222(espnGenericDetail, "espnGenericDetail");
 var PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head><script>(function(){if(window.__szf)return;window.__szf=1;var _f=window.fetch;window.fetch=function(u,o){o=o||{};if(o.signal)return _f(u,o);var c=new AbortController();var t=setTimeout(function(){c.abort()},12000);o.signal=c.signal;return _f(u,o).finally(function(){clearTimeout(t)})}})();<\/script>
@@ -1624,6 +1833,7 @@ footer b{color:var(--txt)}
   <div class="hsearch"><div class="hbox"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="sInD" type="search" placeholder="Search teams, matches, series..." autocomplete="off"></div></div>
   <button class="sbtn" id="sBtn" aria-label="Search"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><div class="livedot" id="liveChip"><i></i><span id="liveTxt">connecting</span></div>
  </header>
+ <nav aria-label="Site navigation" style="display:flex;gap:20px;flex-wrap:wrap;padding:10px 2px;font-size:14px;color:var(--blue)"><a href="/" style="color:var(--lime)">Live scores</a><a href="/schedule" style="color:var(--blue)">Schedule</a><a href="/rankings" style="color:var(--blue)">Rankings</a><a href="/blog" style="color:var(--lime)">Blog &amp; guides</a><a href="/news" style="color:var(--blue)">News</a></nav>
  <div class="hdrbeam"></div>
  <div id="stripWrap"><span class="striptag"><i></i>LIVE</span><div id="liveStrip"></div></div>
  <div class="searchwrap" id="sWrap"><input id="sIn" type="search" placeholder="Search teams, matches, series..." autocomplete="off"><div id="sRes" style="margin-top:10px"></div></div>
@@ -1653,7 +1863,7 @@ footer b{color:var(--txt)}
   <div id="chatInRow"><button id="micBtn" title="Talk to Zaap">\u{1F3A4}</button><input id="chatIn" placeholder="Ask about any match, player, sport..." autocomplete="off"><button id="chatGo">Send</button></div>
  </div>
 </div>
-<script>
+<link rel="stylesheet" href="/celebrations.css"><script src="/celebrations.js?v=auto2"><\/script><script>
 /*__BOOT__*/
 let DATA={cricket:[],football:[],espn:{}},NEWS=[],TAB='all',HIST=[],PREVSC={};
 try{const _qt=new URLSearchParams(location.search).get('tab');if(_qt&&['all','cricket','football','nba','mlb','nhl','tennis','f1','news'].includes(_qt)){TAB=_qt;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab===_qt))}}catch(e){}
@@ -1734,7 +1944,7 @@ function renderScores(){
 function renderNews(){
  const el=$('#news');
  if(!NEWS.length){el.innerHTML='<div class="empty"><div class="big">\u{1F4F0}</div>Loading headlines...</div>';return}
- el.innerHTML=NEWS.map((n,i)=>{
+ el.innerHTML='<section style="padding:20px;background:#143326;border:1px solid #91d734;border-radius:16px;margin:12px 0"><h2 style="margin:0 0 8px">Asian Games 2026</h2><p style="margin:0"><a href="/asian-games" style="color:#b5f14d">India medals, cricket and all Asian Games news &#8594;</a></p></section>'+NEWS.slice().sort((a,b)=>Number(b.link.includes('asian-games'))-Number(a.link.includes('asian-games'))).map((n,i)=>{
    const thumb=n.thumb?'<img class="nthumb" src="'+esc(n.thumb)+'" loading="lazy" onerror="this.remove()">':'<div class="ninit">'+esc((n.source||'S')[0])+'</div>';
    return '<a class="ncard" style="animation-delay:'+Math.min(i*35,350)+'ms" href="'+esc(n.link)+'" target="_blank" rel="noopener"><div class="nbody"><h3>'+esc(n.title)+'</h3><div class="nmeta"><span class="src">'+esc(n.source)+'</span><span>'+ago(n.published)+'</span></div></div>'+thumb+'</a>';
  }).join('');
@@ -1755,14 +1965,17 @@ async function doSearch(q){
   el.innerHTML=h;
  }catch(e){}
 }
+var SCORE_LOADING=false;
 async function loadScores(){
+ if(SCORE_LOADING)return;SCORE_LOADING=true;
  try{
   const r=await fetch('/api/scores',{cache:'no-store'});const j=await r.json();
   DATA.cricket=j.cricket||[];DATA.football=j.football||[];DATA.espn=j.espn||{};
+  if(window.szCelebrate)szCelebrate.home(allMatches().filter(m=>TAB==='all'||TAB===m.sport));
   renderStrip();renderScores();
  }catch(e){
   if(!allMatches().length)$('#scores').innerHTML='<div class="empty"><div class="big">\u{1F4E1}</div>Could not reach the scores server.<br><button class="retry" onclick="loadScores()">Retry</button></div>';
- }
+ }finally{SCORE_LOADING=false}
 }
 async function loadNews(){try{const r=await fetch('/api/news');const j=await r.json();NEWS=j.items||[];if(TAB==='news')renderNews()}catch(e){}}
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');TAB=t.dataset.tab;renderScores()});
@@ -1863,14 +2076,16 @@ if(SR){
 if(allMatches().length){renderStrip();renderScores()}else{$('#scores').innerHTML=skeletons(5)}
 if(NEWS.length&&TAB==='news')renderNews();
 loadScores();loadNews();
-setInterval(loadScores,15000);setInterval(loadNews,300000);
+(function(){var act=Date.now();["pointerdown","touchstart","keydown","scroll","mousemove"].forEach(function(ev){window.addEventListener(ev,function(){act=Date.now()},{passive:true})});window.szLastAct=function(){return act};
+function nextDelay(){var live=false;try{live=allMatches().some(function(m){return m.status==='live'})}catch(e){}if(!live)return 10000;return Date.now()-act>6e5?20000:2000}
+function tick(){if(!document.hidden)loadScores();setTimeout(tick,nextDelay())}setTimeout(tick,nextDelay());})();document.addEventListener("visibilitychange",function(){if(!document.hidden)loadScores()});setInterval(loadNews,300000);
 <\/script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){})}<\/script><button id="thbtn" aria-label="Toggle theme"></button>
 <style>#thbtn{position:fixed;bottom:calc(84px + env(safe-area-inset-bottom));left:auto;right:14px;z-index:60;width:38px;height:38px;border-radius:50%;background:var(--card);border:1px solid var(--line);color:var(--txt);font-size:15px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:.92}</style>
 <script>(function(){var b=document.getElementById('thbtn');function paint(){b.textContent=document.documentElement.dataset.theme==='light'?'\u{1F319}':'\u2600\uFE0F'}paint();b.onclick=function(){var t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;localStorage.sztheme=t;paint()}})();<\/script>
 </body>
 </html>`;
-var SZFOOTER = `<style>
+var SZFOOTER = `<script defer src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token":"6fa497d519d24d48baa64415c25f05be"}'><\/script><style>
 .szfoot{max-width:680px;margin:38px auto 0;border-top:1px solid var(--line);padding:30px 14px 16px;color:var(--dim);font-size:13px;font-family:Inter,system-ui,sans-serif}
 @media (min-width:900px){.szfoot{max-width:1120px;padding:30px 22px 16px}}
 @media (min-width:1200px){.szfoot{max-width:1320px}}
@@ -1890,15 +2105,33 @@ var SZFOOTER = `<style>
 .szfoot .sfbar{margin-top:26px;padding-top:14px;border-top:1px solid var(--line);display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:6px 18px;font-size:12px;text-align:center}
 .szfoot .sfbar a{color:var(--dim);text-decoration:none}
 .szfoot .sfbar a:hover{color:var(--lime)}
+.szfoot .sfheart{color:#e11d48}
 @media (max-width:700px){.szfoot .sfgrid{gap:18px 30px}.szfoot .sfbrand{flex:1 1 100%}.szfoot .sfcol{flex:0 0 calc(33% - 20px);min-width:110px}}
 </style>
 <footer class="szfoot"><div class="sfgrid">
 <div class="sfbrand"><div class="sfrow"><div class="sflogo">&#9889;</div><b>Score<span>Zaap</span></b></div><p>Live scores, rankings and Zaap AI - every sport, one tap.</p></div>
-<div class="sfcol"><h5>Sports</h5><a href="/?tab=cricket">Cricket</a><a href="/?tab=football">Football</a><a href="/?tab=nba">NBA</a><a href="/?tab=mlb">MLB</a><a href="/?tab=nhl">NHL</a><a href="/?tab=tennis">Tennis</a><a href="/?tab=f1">F1</a></div>
-<div class="sfcol"><h5>Explore</h5><a href="/">Live Scores</a><a href="/rankings">ICC Rankings</a><a href="/schedule">Schedule</a><a href="/archives">Archives</a><a href="/?tab=news">News</a><a href="/series/f1/x">F1 Hub</a></div>
+<div class="sfcol"><h5>Sports</h5><a href="/sports/cricket">Cricket</a><a href="/?tab=football">Football</a><a href="/?tab=nba">NBA</a><a href="/?tab=mlb">MLB</a><a href="/?tab=nhl">NHL</a><a href="/?tab=tennis">Tennis</a><a href="/?tab=f1">F1</a></div>
+<div class="sfcol"><h5>Explore</h5><a href="/">Live Scores</a><a href="/blog">Blog</a><a href="/news">News</a><a href="/rankings">ICC Rankings</a><a href="/schedule">Schedule</a><a href="/archives">Archives</a><a href="/?tab=news">News</a><a href="/series/f1/x">F1 Hub</a></div>
 <div class="sfcol"><h5>Company</h5><a href="/about">About Us</a><a href="/contact">Contact Us</a><a href="/privacy">Privacy Policy</a></div>
-</div><div class="sfbar"><span>&copy; 2026 ScoreZaap. All rights reserved.</span></div></footer>`;
+</div><div class="sfbar"><span>&copy; 2026 ScoreZaap. All rights reserved.</span><span>Made in India with <span class="sfheart">&#9829;</span></span></div></footer>`;
+function szBaseSeo(page) {
+  const match = /<title>([^<]*)<\/title>/i.exec(page);
+  if (!match) return page;
+  const title = match[1];
+  const map = { "Contact Us - ScoreZaap": ["/contact", "Contact ScoreZaap about live scores, site issues or corrections to sports guides."], "About Us - ScoreZaap": ["/about", "About ScoreZaap: live cricket, football, tennis and multi-sport scores with original guides."], "Privacy Policy - ScoreZaap": ["/privacy", "Read how ScoreZaap handles website data, analytics and privacy."], "ICC Rankings - ScoreZaap": ["/rankings", "ICC cricket rankings alongside live cricket scores, fixtures and original guides on ScoreZaap."] };
+  const info = map[title];
+  if (!info) return page;
+  let tags = "";
+  if (!/rel=["']canonical/.test(page)) tags += '<link rel="canonical" href="https://scorezaap.tech' + info[0] + '">';
+  if (!/name=["']description/.test(page)) tags += '<meta name="description" content="' + szBlogEsc(info[1]) + '">';
+  if (!/property=["']og:title/.test(page)) tags += '<meta property="og:type" content="website"><meta property="og:title" content="' + szBlogEsc(title) + '"><meta property="og:description" content="' + szBlogEsc(info[1]) + '"><meta property="og:url" content="https://scorezaap.tech' + info[0] + '"><meta name="twitter:card" content="summary">';
+  return page.replace("</head>", tags + "</head>");
+}
+__name(szBaseSeo, "szBaseSeo");
+__name2(szBaseSeo, "szBaseSeo");
 function htmlOut(page, extra) {
+  page = szBaseSeo(page);
+  if (!page.includes('src="/celebrations.js')) page = page.replace("</head>", '<link rel="stylesheet" href="/celebrations.css?v=auto2"><script src="/celebrations.js?v=auto2" defer><\/script></head>');
   const h = { "Content-Type": "text/html;charset=UTF-8" };
   if (extra) Object.assign(h, extra);
   return new Response(page.replace("</body>", SZFOOTER + "\n</body>"), { headers: h });
@@ -1909,6 +2142,8 @@ __name22(htmlOut, "htmlOut");
 __name222(htmlOut, "htmlOut");
 __name2222(htmlOut, "htmlOut");
 __name22222(htmlOut, "htmlOut");
+__name222222(htmlOut, "htmlOut");
+__name2222222(htmlOut, "htmlOut");
 var INFO_PAGE = `<!DOCTYPE html>
 <html lang="en"><head><script>(function(){if(window.__szf)return;window.__szf=1;var _f=window.fetch;window.fetch=function(u,o){o=o||{};if(o.signal)return _f(u,o);var c=new AbortController();var t=setTimeout(function(){c.abort()},12000);o.signal=c.signal;return _f(u,o).finally(function(){clearTimeout(t)})}})();<\/script>
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2184299953562291" crossorigin="anonymous"><\/script><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#070b12"><link rel="icon" type="image/png" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-180.png"><title>__TITLE__ - ScoreZaap</title>
@@ -1962,7 +2197,7 @@ h2{font:700 24px "Space Grotesk",sans-serif;margin-bottom:10px}
 </body></html>`;
 var CONTACT_BODY = `<h2>Contact Us</h2><p class="lead">Feedback, corrections, partnership ideas - we read everything that lands here.</p><a class="mailcard" href="mailto:ashwatthama710@gmail.com"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 7l9 6 9-6"/></svg><div><b>ashwatthama710@gmail.com</b><small>We usually reply within a day or two.</small></div></a><div class="infosec"><h4>Corrections</h4><p>Spot a wrong score, stat or spelling? Mail us the match and what looks off - live data moves fast and we fix fast.</p></div><div class="infosec"><h4>Feedback</h4><p>Tell us what you want next: more leagues, more sports, a feature you keep wishing existed. ScoreZaap is built by listening.</p></div><div class="infosec"><h4>Partnerships</h4><p>For data, content or advertising partnership inquiries, write to the same address with "Partnership" in the subject line.</p></div>`;
 var ABOUT_BODY = `<h2>About Us</h2><p class="lead">ScoreZaap is live scores for every sport you follow - cricket, football, NBA, MLB, NHL, tennis and F1 - in one fast, free place.</p><div class="infosec"><h4>What is ScoreZaap</h4><p>Real-time scores, match stats, rankings, series standings and sports news, built to be instant on any phone or laptop. No sign-up, no app install - open the site and you are caught up.</p></div><div class="infosec"><h4>Zaap AI</h4><p>ScoreZaap comes with Zaap, a built-in AI companion that answers match and sport questions out loud in 10 languages - and automatically replies in the language you speak to it in. Ask for a score, a player stat or a head-to-head and it narrates from live data.</p></div><div class="infosec"><h4>Who runs it</h4><p>ScoreZaap is designed, built and run independently by Akash Sharma, a developer from India who got tired of juggling five apps to follow five sports.</p></div><div class="infosec"><h4>The mission</h4><p>One tap, every score. Keep it fast, keep it free, keep adding the leagues fans actually ask for.</p></div><div class="infosec"><h4>Get in touch</h4><p>Ideas, corrections or partnership inquiries: <a href="/contact" style="color:var(--lime)">contact us</a> - we read everything.</p></div>`;
-var PRIVACY_BODY = `<h2>Privacy Policy</h2><p class="lead">The short version: reading scores on ScoreZaap needs no account, no sign-in and no personal data. Last updated: September 2026.</p><div class="infosec"><h4>What we store</h4><p>Your theme, voice and language preferences live in your own browser (localStorage). If you enable push notifications, your browser gives us a subscription endpoint used only to send match alerts you asked for. Match polls store votes anonymously - one vote per poll per browser.</p></div><div class="infosec"><h4>What we never do</h4><p>We do not sell, rent or share personal data with anyone. We do not run account systems, so there is no profile to leak.</p></div><div class="infosec"><h4>Advertising</h4><p>To keep ScoreZaap free, we may show ads served by Google AdSense. Google may use cookies to serve and measure ads. You can control ad personalization in your Google ad settings.</p></div><div class="infosec"><h4>Analytics</h4><p>We look at aggregate, anonymous usage (which sports and pages get visits) to decide what to build next. No individual tracking profiles.</p></div><div class="infosec"><h4>Contact</h4><p>Questions about this policy: ashwatthama710@gmail.com.</p></div>`;
+var PRIVACY_BODY = `<h2>Privacy Policy</h2><p class="lead">Reading scores does not require an account. Some optional features and service providers process data as described below. Last updated: October 1, 2026.</p><div class="infosec"><h4>Preferences, chat and voice</h4><p>Theme, voice and language preferences are stored in your browser. When you use Zaap chat, up to eight recent messages (up to 500 characters each) are sent to our server and Cloudflare Workers AI to generate a response. The site code does not save chat message bodies in its database. Do not send passwords, payment details or other sensitive information.</p><p>Voice input uses your browser's speech recognition, which may process audio through the browser provider. The resulting text is sent as a chat message. Spoken replies use your browser's speech synthesis. Microphone access is optional and controlled by your browser.</p></div><div class="infosec"><h4>Polls, alerts and service security</h4><p>Poll totals and a hashed IP-based voting identifier are stored to limit repeat voting; voting identifiers expire after 30 days. Chat rate limits use a hashed IP identifier stored for up to five minutes and site-wide daily counts for up to 48 hours. If you enable match alerts, we store your browser's push subscription endpoint and selected match until you unsubscribe. Cloudflare hosts this site and processes network information, including IP addresses, to deliver and protect the service. Provider logging and retention are governed by their own policies.</p></div><div class="infosec"><h4>Advertising and cookies</h4><p>Third-party vendors, including Google, use cookies to serve ads based on your prior visits to this website or other websites. Google's advertising cookies enable Google and its partners to serve ads based on visits to this site and other sites on the Internet. Other ad networks may also use cookies when serving ads through Google.</p><p>You can opt out of personalized advertising in <a href="https://adssettings.google.com/" rel="noopener noreferrer" style="color:var(--lime)">Google Ads Settings</a>, and learn about third-party advertising opt-outs at <a href="https://www.aboutads.info/choices/" rel="noopener noreferrer" style="color:var(--lime)">AboutAds</a>. See <a href="https://policies.google.com/technologies/ads" rel="noopener noreferrer" style="color:var(--lime)">Google's advertising information</a> for details. Browser settings also let you manage cookies. Where consent is required, advertising must respect your consent choices.</p></div><div class="infosec"><h4>Analytics and providers</h4><p>Cloudflare Web Analytics measures visits and page performance. We use aggregate reports, not a ScoreZaap user-account profile. Service providers process information to run hosting, AI responses, analytics, notifications and advertising; this is different from selling your information.</p><p>Read <a href="https://www.cloudflare.com/privacypolicy/" style="color:var(--lime)">Cloudflare's privacy policy</a> and <a href="https://policies.google.com/privacy" style="color:var(--lime)">Google's privacy policy</a>. Your browser provider's policy covers its speech services.</p></div><div class="infosec"><h4>Contact and choices</h4><p>Disable voice permissions or alerts in your browser and clear local storage to remove preferences. Questions or data requests: <a href="mailto:ashwatthama710@gmail.com" style="color:var(--lime)">ashwatthama710@gmail.com</a>.</p></div>`;
 var SERIES_PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head><script>(function(){if(window.__szf)return;window.__szf=1;var _f=window.fetch;window.fetch=function(u,o){o=o||{};if(o.signal)return _f(u,o);var c=new AbortController();var t=setTimeout(function(){c.abort()},12000);o.signal=c.signal;return _f(u,o).finally(function(){clearTimeout(t)})}})();<\/script>
@@ -2102,7 +2337,7 @@ async function load(){
  try{
   const r=await fetch('/api/series?kind='+encodeURIComponent(KIND)+'&id='+encodeURIComponent(SID));
   const d=await r.json();
-  if(d.error){app.innerHTML='<div class="empty"><div class="big">\u{1F3DF}\uFE0F</div>'+esc(d.error)+'</div>';return}
+  if(d.error){app.insertAdjacentHTML('afterbegin','<p class="note">Live update unavailable; saved snapshot below.</p>');return}
   document.title=d.name+' - ScoreZaap';
   let h='<div class="hero"><h2>'+(d.emblem?'<img src="'+esc(d.emblem)+'" onerror="this.remove()">':'')+esc(d.name)+'</h2><div class="sub">'+esc(d.sub||'')+'</div></div>';
   let tables='';
@@ -2116,7 +2351,7 @@ async function load(){
   if(KIND==='cricket'&&!d.standings)h+='<div class="note">Points table appears when the tournament publishes one. Fixtures and results update live.</div>';
   if(KIND==='nba')h+='<div class="note">NBA standings land here once the season starts; fixtures update every 15 min.</div>';
   app.innerHTML=h;
- }catch(e){app.innerHTML='<div class="empty"><div class="big">\u26A0\uFE0F</div>Could not load this series.<br><a href="javascript:location.reload()" style="color:var(--lime)">Retry</a></div>'}
+ }catch(e){app.insertAdjacentHTML('afterbegin','<p class="note">Live update unavailable; saved snapshot below.</p>')}
 }
 load();
 <\/script>
@@ -2220,16 +2455,16 @@ function setF(f){FMT=f;load()}
 function setT(t){TYP=t;load()}
 async function load(){
  chips('fchips',FMTS,FMT,'setF');chips('tchips',TYPS,TYP,'setT');
- document.getElementById('rows').innerHTML='<div class="skel"></div><div class="skel"></div><div class="skel"></div>';
+ const lastGood=document.getElementById('rows').innerHTML;
  try{
   const r=await fetch('/api/rankings?format='+FMT+'&type='+TYP);const j=await r.json();
-  if(j.error){document.getElementById('rows').innerHTML='<div class="note">Rankings temporarily unavailable. Try again later.</div>';return}
-  document.getElementById('upd').textContent='Updated '+esc(j.updated||'');
+  if(j.error){document.getElementById('upd').textContent='Live update unavailable; saved snapshot below.';return}
+  document.getElementById('upd').textContent='Feed snapshot '+(j.updated||'date unavailable')+(j.sourceNote?' \xB7 '+j.sourceNote:'');
   document.getElementById('rows').innerHTML=j.rows.map((x,i)=>{
    const tr=x.trend==='Up'?'<span style="color:var(--lime)">\u25B2</span>':(x.trend==='Down'?'<span style="color:var(--red)">\u25BC</span>':'<span style="color:var(--dim)">\u2022</span>');
    return '<div class="row'+(x.rank<=3?' top3':'')+'" style="animation-delay:'+Math.min(i*30,300)+'ms'+(x.id?';cursor:pointer':'')+'"'+(x.id?' onclick="location.href='+String.fromCharCode(39)+'/player/'+x.id+String.fromCharCode(39)+'"':'')+'><div class="rk">'+x.rank+'</div>'+(x.img?'<img class="pimg" src="'+esc(x.img)+'" loading="lazy" onerror="this.remove()">':'')+'<div class="nm">'+esc(x.name)+'<small>'+esc(x.country||'')+'</small></div><div class="tr">'+tr+'</div><div class="rt">'+x.rating+'</div></div>';
   }).join('');
- }catch(e){document.getElementById('rows').innerHTML='<div class="note">Network error. Retry.</div>'}
+ }catch(e){document.getElementById('upd').textContent='Live update unavailable; saved snapshot below.'}
 }
 load();
 <\/script>
@@ -2358,6 +2593,8 @@ __name222(escAttr, "escAttr");
 __name2222(escAttr, "escAttr");
 __name22222(escAttr, "escAttr");
 __name222222(escAttr, "escAttr");
+__name2222222(escAttr, "escAttr");
+__name22222222(escAttr, "escAttr");
 var MATCH_PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head><script>(function(){if(window.__szf)return;window.__szf=1;var _f=window.fetch;window.fetch=function(u,o){o=o||{};if(o.signal)return _f(u,o);var c=new AbortController();var t=setTimeout(function(){c.abort()},12000);o.signal=c.signal;return _f(u,o).finally(function(){clearTimeout(t)})}})();<\/script>
@@ -2545,7 +2782,7 @@ td.num{font-variant-numeric:tabular-nums}
  </div>
  <div id="app"><div class="skel sk1"></div><div class="skel sk2"></div><div class="skel sk3"></div></div>
 </div>
-<script>
+<link rel="stylesheet" href="/celebrations.css"><script src="/celebrations.js?v=auto2"><\/script><script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const parts=location.pathname.split('/');
@@ -2802,24 +3039,28 @@ function render(){
  loadPoll(d);
  document.title=(d.title||'Match')+' \xB7 ScoreZaap';
 }
+var MATCH_LOADING=false;
 async function load(first){
+ if(MATCH_LOADING)return;MATCH_LOADING=true;
  try{
   if(first){try{const c=sessionStorage.getItem('md_'+SPORT+'_'+MID);if(c){const p=JSON.parse(c);if(Date.now()-p.at<120e3&&p.j&&!p.j.error){DETAIL=p.j.detail;SQUADS=p.j.squads||null;SCARD=p.j.scorecard||null;TIMELINE=p.j.timeline||null;COMM=p.j.commentary||null;STATS=p.j.stats||null;GRAPHS=p.j.graphs||null;ENDED=!isLive(DETAIL);render()}}}catch(e){}}
   const r=await fetch('/api/match?sport='+SPORT+'&id='+encodeURIComponent(MID));
   const j=await r.json();
   if(j.error){$('#app').innerHTML='<div class="err">'+esc(j.error)+'<br><a class="retry" href="/">\u2190 Back to scores</a></div>';return}
+  if(window.szCelebrate)szCelebrate.detail(SPORT,MID,j);
   DETAIL=j.detail;SQUADS=j.squads||null;SCARD=j.scorecard||null;TIMELINE=j.timeline||null;COMM=j.commentary||null;STATS=j.stats||null;GRAPHS=j.graphs||null;
   ENDED=!isLive(DETAIL);
   $('#ref').innerHTML=ENDED?'':'<span class="rdot"></span><span class="rtxt">Auto-refreshing</span>';
   render();
- }catch(e){if(!DETAIL)$('#app').innerHTML='<div class="err">Taking too long to load. <a class="retry" href="">Retry</a></div>'}
+ }catch(e){if(!DETAIL)$('#app').innerHTML='<div class="err">Taking too long to load. <a class="retry" href="">Retry</a></div>'}finally{MATCH_LOADING=false}
 }
 document.addEventListener('click',e=>{
  const tb=e.target.closest('.htab button');if(tb){CTAB=tb.dataset.t;render();return}
  const ch=e.target.closest('.chip');if(ch){CINN=+ch.dataset.inn;render();return}
 });
 load(true);
-setInterval(()=>{if(!ENDED)load(false)},30000);
+(function(){var act=Date.now();["pointerdown","touchstart","keydown","scroll","mousemove"].forEach(function(ev){window.addEventListener(ev,function(){act=Date.now()},{passive:true})});
+function tick(){if(!ENDED&&!document.hidden)load(false);setTimeout(tick,Date.now()-act>6e5?20000:4000)}setTimeout(tick,4000);})();document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!ENDED)load(false)});
 <\/script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){})}<\/script><button id="thbtn" aria-label="Toggle theme"></button>
 <style>#thbtn{position:fixed;bottom:calc(84px + env(safe-area-inset-bottom));left:auto;right:14px;z-index:60;width:38px;height:38px;border-radius:50%;background:var(--card);border:1px solid var(--line);color:var(--txt);font-size:15px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:.92}</style>
@@ -2853,6 +3094,8 @@ __name222(cbzHtmlScore, "cbzHtmlScore");
 __name2222(cbzHtmlScore, "cbzHtmlScore");
 __name22222(cbzHtmlScore, "cbzHtmlScore");
 __name222222(cbzHtmlScore, "cbzHtmlScore");
+__name2222222(cbzHtmlScore, "cbzHtmlScore");
+__name22222222(cbzHtmlScore, "cbzHtmlScore");
 async function cbzMiniJson(numericId, kind) {
   try {
     const r = await fetch("https://m.cricbuzz.com/api/mcenter/" + kind + "/" + numericId, { headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "application/json" } });
@@ -2869,10 +3112,12 @@ __name222(cbzMiniJson, "cbzMiniJson");
 __name2222(cbzMiniJson, "cbzMiniJson");
 __name22222(cbzMiniJson, "cbzMiniJson");
 __name222222(cbzMiniJson, "cbzMiniJson");
+__name2222222(cbzMiniJson, "cbzMiniJson");
+__name22222222(cbzMiniJson, "cbzMiniJson");
 function cbzMiniScorecard(d) {
   const sc = d && Array.isArray(d.scoreCard) ? d.scoreCard : null;
   if (!sc || !sc.length) return null;
-  const numk = /* @__PURE__ */ __name2222((k) => +(String(k).split("_")[1] || 0), "numk");
+  const numk = /* @__PURE__ */ __name222222((k) => +(String(k).split("_")[1] || 0), "numk");
   const innings = sc.slice().sort((a, b) => (a.inningsId || 0) - (b.inningsId || 0)).map((inn) => {
     const sd = inn.scoreDetails || {};
     const bd = (inn.batTeamDetails || {}).batsmenData || {};
@@ -2895,6 +3140,8 @@ __name222(cbzMiniScorecard, "cbzMiniScorecard");
 __name2222(cbzMiniScorecard, "cbzMiniScorecard");
 __name22222(cbzMiniScorecard, "cbzMiniScorecard");
 __name222222(cbzMiniScorecard, "cbzMiniScorecard");
+__name2222222(cbzMiniScorecard, "cbzMiniScorecard");
+__name22222222(cbzMiniScorecard, "cbzMiniScorecard");
 async function cbzMiniScorecardFetch(numericId) {
   const d = await cbzMiniJson(numericId, "scorecard");
   return cbzMiniScorecard(d);
@@ -2906,6 +3153,8 @@ __name222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
 __name2222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
 __name22222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
 __name222222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
+__name2222222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
+__name22222222(cbzMiniScorecardFetch, "cbzMiniScorecardFetch");
 async function cbzMiniCommentary(numericId, live) {
   const d = await cbzMiniJson(numericId, "comm");
   const mc = d && d.matchCommentary;
@@ -2928,6 +3177,8 @@ __name222(cbzMiniCommentary, "cbzMiniCommentary");
 __name2222(cbzMiniCommentary, "cbzMiniCommentary");
 __name22222(cbzMiniCommentary, "cbzMiniCommentary");
 __name222222(cbzMiniCommentary, "cbzMiniCommentary");
+__name2222222(cbzMiniCommentary, "cbzMiniCommentary");
+__name22222222(cbzMiniCommentary, "cbzMiniCommentary");
 function betterScore(cur2, idx2, val2) {
   const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
   if (!pm) return false;
@@ -2944,17 +3195,19 @@ __name222(betterScore, "betterScore");
 __name2222(betterScore, "betterScore");
 __name22222(betterScore, "betterScore");
 __name222222(betterScore, "betterScore");
+__name2222222(betterScore, "betterScore");
+__name22222222(betterScore, "betterScore");
 function applyMiniScore(lm, s) {
   if (!lm || !s) return false;
   let changed = false;
   if (Array.isArray(s.innings) && s.innings.length) {
     const cur = Array.isArray(lm.scores) ? lm.scores.slice() : [];
-    const shortFor = (nm) => {
+    const shortFor = /* @__PURE__ */ __name2((nm) => {
       const n = String(nm || "").toLowerCase();
       if (lm.home && lm.home.short && String(lm.home.name || "").toLowerCase() === n) return lm.home.short;
       if (lm.away && lm.away.short && String(lm.away.name || "").toLowerCase() === n) return lm.away.short;
       return String(nm || "TM").slice(0, 8);
-    };
+    }, "shortFor");
     const teamCount = {};
     s.innings.forEach((inn) => {
       const val = (inn.runs != null ? inn.runs : 0) + "/" + (inn.wkts != null ? inn.wkts : 0) + " (" + inn.overs + ")";
@@ -2994,6 +3247,8 @@ __name222(applyMiniScore, "applyMiniScore");
 __name2222(applyMiniScore, "applyMiniScore");
 __name22222(applyMiniScore, "applyMiniScore");
 __name222222(applyMiniScore, "applyMiniScore");
+__name2222222(applyMiniScore, "applyMiniScore");
+__name22222222(applyMiniScore, "applyMiniScore");
 function applyHtmlScore(lm, s, matchType) {
   if (!s || !s.scores || !s.scores.length) return false;
   const defOvers = matchType === "T20" ? "20" : "50";
@@ -3039,6 +3294,8 @@ __name222(applyHtmlScore, "applyHtmlScore");
 __name2222(applyHtmlScore, "applyHtmlScore");
 __name22222(applyHtmlScore, "applyHtmlScore");
 __name222222(applyHtmlScore, "applyHtmlScore");
+__name2222222(applyHtmlScore, "applyHtmlScore");
+__name22222222(applyHtmlScore, "applyHtmlScore");
 var TEAM_PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head><script>(function(){if(window.__szf)return;window.__szf=1;var _f=window.fetch;window.fetch=function(u,o){o=o||{};if(o.signal)return _f(u,o);var c=new AbortController();var t=setTimeout(function(){c.abort()},12000);o.signal=c.signal;return _f(u,o).finally(function(){clearTimeout(t)})}})();<\/script>
@@ -3156,7 +3413,7 @@ async function load(){
   const sect=(t,l)=>l.length?'<div class="sect">'+t+'</div>'+l.map(row).join(''):'';
   h+=sect('Live now',live)+sect('Upcoming',up)+sect('Recent results',fin.slice(0,20));
   app.innerHTML=h;
- }catch(e){app.innerHTML='<div class="note">Network error. Retry.</div>'}
+ }catch(e){app.insertAdjacentHTML('afterbegin','<p class="note">Live update unavailable; showing the saved snapshot.</p>')}
 }
 load();
 
@@ -3292,7 +3549,7 @@ async function load(){
   arr.forEach(m=>{const k=m.start?dkey(m.start):'tbd';if(k!==lastK){lastK=k;h+='<div class="dayh">'+(k==='tbd'?'Date TBC':esc(dlabel(k)))+'</div>'}h+=row(m)});
   if(!arr.length&&!(MODE==='fixtures'&&live.length))h+='<div class="note">Nothing to show here yet - check back around match time.</div>';
   app.innerHTML=h;
- }catch(e){app.innerHTML='<div class="note">Network error. Retry.</div>'}
+ }catch(e){app.insertAdjacentHTML('afterbegin','<p class="note">Live update unavailable; showing the saved snapshot.</p>')}
 }
 load();
 
@@ -3304,7 +3561,7 @@ load();
 </html>`;
 var SEC_HEADERS = {
   "Strict-Transport-Security": "max-age=15552000; includeSubDomains",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://pagead2.googlesyndication.com https://www.googletagservices.com https://adservice.google.com https://tpc.googlesyndication.com https://fundingchoicesmessages.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://pagead2.googlesyndication.com https://www.googletagservices.com https://googleads.g.doubleclick.net https://www.google.com https://fundingchoicesmessages.google.com https://ep1.adtrafficquality.google; frame-src https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://www.google.com https://fundingchoicesmessages.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://pagead2.googlesyndication.com https://www.googletagservices.com https://adservice.google.com https://tpc.googlesyndication.com https://fundingchoicesmessages.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://cloudflareinsights.com https://pagead2.googlesyndication.com https://www.googletagservices.com https://googleads.g.doubleclick.net https://www.google.com https://fundingchoicesmessages.google.com https://ep1.adtrafficquality.google; frame-src https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://www.google.com https://fundingchoicesmessages.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
   "X-Frame-Options": "DENY",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -3319,9 +3576,13 @@ __name2(ipHash, "ipHash");
 __name22(ipHash, "ipHash");
 __name222(ipHash, "ipHash");
 __name2222(ipHash, "ipHash");
+__name22222(ipHash, "ipHash");
+__name222222(ipHash, "ipHash");
 function ssrEsc(x) {
-  return String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return String(x == null ? "" : x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 }
+__name(ssrEsc, "ssrEsc");
+__name2(ssrEsc, "ssrEsc");
 function matchSSR(sport, j) {
   if (!j || j.error || !j.detail) return "";
   const d = j.detail;
@@ -3378,6 +3639,8 @@ function matchSSR(sport, j) {
   h += "</div>";
   return h;
 }
+__name(matchSSR, "matchSSR");
+__name2(matchSSR, "matchSSR");
 function homeSSR(d) {
   const order = { live: 0, upcoming: 1, finished: 2 };
   const now = Date.now();
@@ -3387,7 +3650,7 @@ function homeSSR(d) {
     const list = (Array.isArray(list0) ? list0 : []).filter((m) => {
       if (m.status === "finished") {
         const t = new Date(m.end || m.start || 0).getTime();
-        return !t || now - t < 48 * 3600e3;
+        return !t || now - t < 48 * 36e5;
       }
       return true;
     }).sort((a, b) => (order[a.status] != null ? order[a.status] : 1) - (order[b.status] != null ? order[b.status] : 1) || String(a.start || "").localeCompare(String(b.start || ""))).slice(0, 10);
@@ -3397,30 +3660,1059 @@ function homeSSR(d) {
       const url2 = "/match/" + sport + "/" + encodeURIComponent(m.id);
       const sc = Array.isArray(m.scores) && m.scores.length ? " - " + m.scores.map((s) => ((s.inning ? s.inning + " " : "") + (s.value || "")).trim()).filter(Boolean).join(", ") : "";
       const bits = [m.statusText || m.status, m.matchType, m.venue].filter(Boolean).join(" - ");
-      const title = m.title || ((m.home && m.home.name || "") + " vs " + (m.away && m.away.name || ""));
+      const title = m.title || (m.home && m.home.name || "") + " vs " + (m.away && m.away.name || "");
       h += '<li><a href="' + ssrEsc(url2) + '">' + ssrEsc(title) + "</a>" + ssrEsc(sc) + (bits ? ' <span class="dim">' + ssrEsc(bits) + "</span>" : "") + "</li>";
     }
     h += "</ul>";
   }
   return h;
 }
+__name(homeSSR, "homeSSR");
+__name2(homeSSR, "homeSSR");
 function newsSSR(items) {
+  items = SZ_NEWS_POSTS.map((p) => ({ title: p.title, link: "/news/" + p.slug, source: "ScoreZaap" }));
   if (!Array.isArray(items) || !items.length) return "";
   return "<h2>Latest sports news</h2><ul>" + items.slice(0, 12).map((n2) => n2 && n2.link && n2.title ? '<li><a href="' + ssrEsc(n2.link) + '" rel="noopener">' + ssrEsc(n2.title) + "</a>" + (n2.source ? ' <span class="dim">' + ssrEsc(n2.source) + "</span>" : "") + "</li>" : "").join("") + "</ul>";
 }
+__name(newsSSR, "newsSSR");
+__name2(newsSSR, "newsSSR");
+var SZ_BLOG_POSTS = [{ "slug": "how-to-read-a-cricket-scorecard", "category": "Cricket", "title": "How to read a cricket scorecard", "description": "Understand runs, wickets, overs and individual figures through a worked cricket scorecard example.", "body": "<section><h2>Read the headline in order</h2><p>In a hypothetical score of 156/4 after 18.2 overs, 156 is the team total, four wickets have fallen, and two valid balls have been bowled after 18 completed overs. The total includes batter runs and extras. It is not the personal score of one player.</p><p>Check the innings, match format and target before deciding who is ahead. The same total can describe very different situations. A chase with few balls left needs a different reading from an innings that still has plenty of time.</p></section><section><h2>Separate batting from bowling</h2><p>A batting row commonly lists runs, balls faced, fours, sixes and strike rate. Runs measure output; balls describe the recorded opportunity used. A star commonly indicates not out, but check the interface labels because providers arrange scorecards differently.</p><p>A bowling row commonly gives overs, maidens, runs conceded and wickets. A run out can reduce the team's wickets remaining without giving a bowler a wicket. Team runs need not equal the sum of bowling runs because some extras are allocated separately.</p></section><section><h2>Look for the innings story</h2><p>Scan the fall of wickets and partnerships. A collapse followed by a recovery can reach the same total as steady batting, but the remaining resources differ. Total, overs, wickets and the current pair make a better quick summary than the total alone.</p><p>On ScoreZaap, start with the match headline and then open the scorecard for detail. If a number changes, check the delivery outcome and innings label before assuming a problem. Live scoring can be corrected. Every number in this guide is a teaching example, not a report of a real fixture.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-over", "MCC: The over"], ["https://www.lords.org/mcc/the-laws/scoring-runs", "MCC: Scoring runs"]] }, { "slug": "cricket-overs-and-balls-explained", "category": "Cricket", "title": "Why 19.5 overs is not a decimal", "description": "Convert overs into valid balls and avoid common mistakes when reading a cricket chase.", "body": "<section><h2>The dot counts balls</h2><p>Cricket overs are written as completed overs plus valid balls in the next over. After 19.4 comes 19.5, then 20.0 after the next valid ball. In a hypothetical 20-over innings, 19.5 leaves one valid ball, not half an over.</p><p>Multiply completed overs by six and add the last digit. At 12.3, that is 12 times six plus three: 75 valid balls. For arithmetic expressed in decimal overs, divide 75 by six. That gives 12.5, not 12.3.</p></section><section><h2>Work in balls during a chase</h2><p>Suppose an innings is at 17.4 of a 20-over allocation. It has used 106 valid balls out of 120, leaving 14. Thinking in balls is more precise than casually describing that as about two overs.</p><p>Use the current allocation, not just the match's original format. After a weather interruption, the target and available overs may be revised. A calculation based on the original allocation can give a convincing but incorrect answer.</p></section><section><h2>Why a number can stand still</h2><p>Wides and no-balls do not count as one of an over's six valid balls. Runs can therefore increase without the overs display advancing. Other situations described in the Laws can also affect whether a delivery counts.</p><p>Read the event label beside the number. Two events under the same over-and-ball notation are not necessarily duplicates: one may be an extra before the next valid delivery. On ScoreZaap, read overs together with innings status and the target. A stationary count can mean an interruption rather than a finished innings.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-over", "MCC: The over"]] }, { "slug": "cricket-extras-wides-no-balls-byes", "category": "Cricket", "title": "Wides, no-balls, byes and leg byes", "description": "Explain cricket extras and why team totals can differ from individual batting and bowling figures.", "body": "<section><h2>Extras belong in the team total</h2><p>Extras are part of the batting side's score, not a correction to remove later. If a hypothetical side has 140 runs from batters and 12 extras, the team total is 152. Adding only the batting rows leaves an apparent gap until you include extras.</p><p>The scorer records the category after the umpire's decision. Do not classify a delivery from a headline number alone. An event can produce more than one kind of scoring information, and a later correction can change the breakdown.</p></section><section><h2>Wides and no-balls</h2><p>A wide is an umpire's call under the Laws, not simply any ball a viewer thinks was hard to reach. A wide carries a one-run penalty and additional runs may be scored. A no-ball also carries a one-run penalty, with the rest of the outcome depending on the delivery.</p><p>Neither counts as one of the six valid balls in an over. If the score rises but the ball count stays fixed, check the delivery label before assuming the feed is frozen.</p></section><section><h2>Byes and leg byes</h2><p>Byes cover qualifying runs when the ball has not touched the bat or batter. Leg byes concern qualifying runs after contact with the batter rather than the bat. Leg byes have conditions in the Laws, including attempting to play the ball or avoid being hit. Pad contact alone is not enough.</p><p>Byes and leg byes are not charged to a bowler in the same way as runs off the bat and wide or no-ball penalties. Team and bowling totals therefore use different allocation rules. Read ScoreZaap's extras row alongside the individual figures rather than expecting every column sum to match.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/no-ball", "MCC: No ball"], ["https://www.lords.org/mcc/the-laws/wide-ball", "MCC: Wide ball"], ["https://www.lords.org/mcc/the-laws/bye-and-leg-bye", "MCC: Bye and leg bye"]] }, { "slug": "current-and-required-run-rate", "category": "Cricket", "title": "Current vs required run rate", "description": "Calculate scoring pace correctly and understand what a required rate cannot tell you about a chase.", "body": "<section><h2>Two rates, two questions</h2><p>Current rate describes scoring so far. Required rate describes the average pace needed over the remaining allocation to reach the stated target. Neither is a prediction that the team will win.</p><p>Convert the overs display into balls before calculating. At 10.3, there have been 63 valid balls, equivalent to 10.5 decimal overs. A hypothetical 84 runs at that point gives a current rate of eight per over, not 84 divided by 10.3.</p></section><section><h2>Calculate what remains</h2><p>For a basic chase, divide runs still needed by remaining balls expressed as overs. A hypothetical side needing 30 from 24 valid balls has four overs left, giving a required rate of 7.5 per over.</p><p>Use the official target shown after an interruption. Do not invent a rain-adjusted target by scaling the first innings yourself. A revised allocation changes the available balls and can change the required rate.</p></section><section><h2>Add wickets and context</h2><p>Two teams can face the same required rate with different chances because their wickets, current batters and bowling opposition differ. The rate cannot capture every part of that situation. Near the end, one boundary can move it sharply because few balls remain.</p><p>A fuller hypothetical summary is 30 needed from 24 with six wickets lost. That describes time and resources instead of quoting only 7.5. On ScoreZaap, combine the rate with target, innings status and scorecard. Keep it separate from a betting probability, and do not treat scoring pace as a guaranteed result.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-over", "MCC: The over"], ["https://www.lords.org/mcc/the-laws/scoring-runs", "MCC: Scoring runs"]] }, { "slug": "batting-strike-rate-and-bowling-economy", "category": "Cricket", "title": "Strike rate and economy: read both in context", "description": "Understand two common cricket statistics without confusing a short sample with a lasting performance.", "body": "<section><h2>Batting strike rate</h2><p>The usual formula is runs divided by balls faced, multiplied by 100. A hypothetical 36 from 24 balls gives 150. That describes an equivalent pace per 100 balls, not an innings that actually lasted 100 balls.</p><p>A short cameo can produce a striking figure. Eight runs from two balls gives 400, but it contains much less evidence than an extended innings. Always read runs and balls alongside the rate.</p></section><section><h2>Bowling economy</h2><p>Economy divides runs charged to the bowler by correctly expressed overs. Conceding a hypothetical 21 from 3.3 overs means 21 valid balls, or 3.5 decimal overs. The economy is six. Dividing by 3.3 mistakes the ball display for a decimal.</p><p>Use the bowler's conceded-runs column rather than all team runs during the spell. Extras have allocation rules, so those totals are not interchangeable.</p></section><section><h2>Compare like with like</h2><p>A batter trying to finish a short chase has a different task from one rebuilding after wickets. A bowler delivering late in a limited-overs innings can face different pressure from one operating earlier. A single rate cannot show the role or conditions.</p><p>Read wickets as well as economy. A low rate without dismissals and a higher rate with important wickets describe different contributions. On ScoreZaap, compare the player row with the whole innings and check format and sample size. These worked numbers are illustrative, not current statistics for a named player.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-over", "MCC: The over"], ["https://www.lords.org/mcc/the-laws/bye-and-leg-bye", "MCC: Bye and leg bye"]] }, { "slug": "football-stoppage-time-explained", "category": "Football", "title": "Why stoppage time can run beyond the board", "description": "Understand minimum added time and why 90+5 does not guarantee a whistle at 95:00.", "body": "<section><h2>The board is a minimum</h2><p>IFAB Law7 requires allowance for time lost in each half. Causes include substitutions, injury assessment or removal, time wasting, disciplinary sanctions, permitted medical breaks, VAR delays, goal celebrations and significant delays to restarts.</p><p>The fourth official shows the minimum additional time decided by the referee. It may be increased but not reduced. A further interruption during that period can therefore extend play beyond the number shown.</p></section><section><h2>Read the minute carefully</h2><p>A hypothetical 90+5 display places play beyond the 90-minute mark. Providers present added minutes differently. That display does not itself prove what the board originally showed or promise that the match is about to finish.</p><p>If play reaches 90+7 after a board showed five, check events during added time rather than immediately assuming an error. The referee remains responsible for ending the half. If a penalty must be taken or retaken, the half is extended until the kick is completed.</p></section><section><h2>Added time is not extra time</h2><p>Stoppage time is part of the relevant half. Extra time is another phase used when the competition requires it. A level score after normal time does not automatically send every match into extra time.</p><p>On ScoreZaap, combine the minute with score, status and latest event. A motionless clock can reflect a pause or delayed update; it does not prove full time. Wait for a confirmed final status before sharing the result. The examples here explain the rule and are not claims about a particular referee's decision.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-duration-of-the-match/", "IFAB: Duration of the match"]] }, { "slug": "offside-position-vs-offside-offence", "category": "Football", "title": "Offside position is not always an offence", "description": "Understand the timing of offside, active involvement and direct-restart exceptions.", "body": "<section><h2>Position is only the starting point</h2><p>Under IFAB Law11, the relevant parts of the head, body or feet must be in the opponents' half and nearer the goal line than both the ball and the second-last opponent for an offside position. Hands and arms do not determine that position. Being level with the second-last opponent is not offside.</p><p>Use the second-last opponent as the reference, not automatically the last outfield defender. The goalkeeper does not have to be the opponent closest to the goal line.</p></section><section><h2>The timing of the pass matters</h2><p>Position is judged at the relevant play or touch by a team-mate, not simply when the receiver reaches the ball. The first point of contact is used for that assessment under the Law. A later screenshot can therefore tell a different story from the moment of the pass.</p><p>A player can run beyond defenders after an onside starting position. Receiving nearer the goal does not by itself make that run offside. Conversely, someone may look clear when receiving but have been beyond the line at the earlier touch.</p></section><section><h2>Involvement and exceptions</h2><p>The Law describes interfering with play, interfering with an opponent and gaining an advantage in specified situations. Touching the ball is not the only possible involvement: obstructing an opponent's line of vision or challenging them can matter. Standing beyond the line alone does not settle the decision.</p><p>There is no offside offence for receiving directly from a goal kick, throw-in or corner kick. A later team-mate's touch can create a new assessment point. ScoreZaap can show the event and revised result, but a scoreboard cannot supply every camera angle needed to judge a review. Wait for the official outcome.</p></section>", "sources": [["https://www.theifab.com/laws/latest/offside/", "IFAB: Offside"]] }, { "slug": "football-match-status-guide", "category": "Football", "title": "Live, halftime and full time: read the status", "description": "Use a football score, clock and status together instead of mistaking a pause for a result.", "body": "<section><h2>One score can describe several states</h2><p>A 1-1 score can belong to a live game, an interval, the end of normal play or a confirmed draw. The number is only part of the information. Start with the fixture and match status before deciding what it means.</p><p>A clock near 45 minutes does not prove halftime, and a clock beyond 90 does not prove full time. Added time is a minimum and the referee decides when the half ends.</p></section><section><h2>A pause is not a final result</h2><p>At halftime, a leading side has not won the match. A delay or temporary suspension is not necessarily an abandonment. Competition rules decide what happens after an abandoned match; the score does not universally become the result.</p><p>Feeds can update score and status separately. If one field seems ahead, read the latest events rather than assuming a stationary score is final. An upstream review or delay cannot be resolved by refreshing the browser faster.</p></section><section><h2>Normal time and knockout phases</h2><p>A level score after normal time may be final or may lead to another phase, depending on the competition. If there is a shootout, keep the match score separate from the shootout tally. Read the labels before repeating a number.</p><p>A reliable quick check is fixture, status, score, then the latest event or timestamp if available. Use ScoreZaap's live view for a match in progress and Archives for past results. Wait for a confirmed final label before sharing a winner. Providers can use different abbreviations, so do not assume one label system applies everywhere.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-duration-of-the-match/", "IFAB: Match duration"]] }, { "slug": "tennis-scoring-points-games-sets", "category": "Tennis", "title": "Tennis scoring: points, games and sets", "description": "Decode love, 15, 30, 40, deuce and set columns without mixing the different levels of a tennis score.", "body": "<section><h2>Points make a game</h2><p>In a standard game, zero is love and the next points are 15, 30 and 40. A fourth point normally wins the game, except when both sides have won three points. At 40-40 the score is deuce.</p><p>In standard advantage scoring, one point after deuce gives advantage. Winning the next point wins the game; losing it returns to deuce. Alternative methods such as no-ad scoring exist, so confirm the event format.</p></section><section><h2>Games make a set</h2><p>The standard set formats in the ITF rules require six games with a two-game margin. A set can end 6-4 or 7-5. In a tie-break set, 6-6 leads to a tie-break. In an advantage set, games continue until the required margin.</p><p>A display such as 6-3 2-4 can show a completed first set and the games in the next. It is not a combined nine-to-seven score. Match the columns to the player names and read the completed sets before focusing on the current game.</p></section><section><h2>Sets make the match</h2><p>The match format determines how many sets are needed to win. A player leading the current set can still trail overall. The final column alone cannot tell you the whole situation.</p><p>A serve marker commonly identifies who is serving, but read the interface labels because presentation differs. Use ScoreZaap's current status and completed sets together. This guide describes standard scoring and noted alternatives, not a claim that every tournament uses the same set or tie-break format.</p></section>", "sources": [["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: 2026 Rules of Tennis"]] }, { "slug": "tennis-tiebreaks-seven-and-ten-points", "category": "Tennis", "title": "Seven-point and ten-point tie-breaks", "description": "Understand the two-point margin, service rhythm and difference between a set tie-break and a match tie-break.", "body": "<section><h2>Seven is a threshold, not a cap</h2><p>In the standard tie-break described by the ITF, points are counted zero, one, two and onward. A side must reach seven with a two-point lead to win the game and set. A 7-6 score is not enough.</p><p>If the margin remains one, play continues. The tie-break can finish 8-6, 10-8 or later. The winning threshold and margin are separate conditions.</p></section><section><h2>Serving follows a different rhythm</h2><p>The side whose turn it is to serve takes the opening point. The other side serves the next two. After that, service alternates in blocks of two points, with the doubles rotation maintained where applicable.</p><p>This explains why the serve marker moves after the first point and then after pairs. Keep the current server separate from the side leading the score. A service change does not necessarily signal an error.</p></section><section><h2>Ten points can mean different phases</h2><p>The ITF permits alternative formats involving ten-point tie-breaks. A match tie-break can replace a deciding set. A final-set ten-point tie-break at six games all comes after a deciding set has reached 6-6. Those are different places in the match.</p><p>Both use the specified two-point margin, but a match tie-break is not a set containing ten ordinary games. A 6-5 tie-break score can have very different stakes depending on whether seven or ten is the threshold. Read ScoreZaap's phase and completed set scores, then check the event conditions if the format is unclear.</p></section>", "sources": [["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: 2026 Rules of Tennis"]] }, { "slug": "tennis-break-set-and-match-point", "category": "Tennis", "title": "Break point, set point and match point", "description": "Distinguish a chance to win a return game from an opportunity to finish the set or the match.", "body": "<section><h2>An opportunity is not an outcome</h2><p>These phrases tell you what the next point could achieve, not what has already happened. A player can have several chances and convert none. A scoreboard is easier to read when opportunity and result stay separate.</p><p>In a standard game, break point is a point on which the receiver could win the game. A hypothetical receiver leading 40-30 could take the server's game next. If the server wins that point, the score returns to deuce.</p></section><section><h2>Set and match points add more layers</h2><p>A set point is an opportunity to win the set next. It can happen on serve or return. In a hypothetical standard set, a server leading 5-4 and 40-30 could finish the set by winning the next point. A game point at 2-2 does not have that consequence.</p><p>A match point can finish the entire match. Completed sets and match format decide whether a set-ending point is also match-ending. A current point score alone cannot answer that.</p></section><section><h2>One point can have several labels</h2><p>A receiver could face a point that wins the return game, the set and the match together. That point can be both break point and match point. The phrases describe different levels of the same opportunity.</p><p>Three break-point chances do not mean three breaks of serve. Conversion is a separate outcome. Saving match points is not a victory until the remaining match has been won. On ScoreZaap, check completed games, sets and final status. These examples assume standard advantage scoring; alternative formats can change the path.</p></section>", "sources": [["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: 2026 Rules of Tennis"]] }, { "slug": "follow-live-scores-with-context", "category": "Sports guides", "title": "Follow live scores without losing the context", "description": "A practical routine for checking fixtures, delays, corrections, time zones and confirmed results.", "body": "<section><h2>Start with the right fixture</h2><p>Read teams or players, competition and scheduled date. Similar names, reserve sides and repeated fixtures can make a familiar-looking score easy to misidentify. When you share a result, include enough detail for someone else to find the same game.</p><p>Check the displayed time zone before planning around a start time. A date near midnight can differ across zones. A postponed match can retain its original listing while its status changes, so a schedule is not a guarantee.</p></section><section><h2>Read the surrounding labels</h2><p>Cricket needs runs, wickets, overs and target together. Football needs score and phase. Tennis separates games from sets. A number copied without its labels can be accurate but misleading.</p><p>A score staying still does not prove the match ended. Rain, reviews, intervals and upstream delays can all explain it. Wait for a confirmed final status rather than guessing from elapsed time.</p></section><section><h2>Handle corrections honestly</h2><p>A scoring event can be revised or an official decision can change an early display. Refreshing only retrieves the provider's current information. It cannot remove a delay at the source. When two feeds disagree, do not average them into a new invented score.</p><p>Use the right view for the question: live match for now, Schedule for next, Archives for past results, and Blog for explanations. ScoreZaap links those views. These guides are explanatory reading, not live commentary, a betting service or a promise of instant updates. Worked examples must not be repeated as real match reports.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-over", "MCC: Cricket overs"], ["https://www.theifab.com/laws/latest/the-duration-of-the-match/", "IFAB: Match duration"], ["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: Tennis scoring"]] }, { "slug": "nba-score-clock-and-overtime", "category": "Basketball", "title": "NBA scores: points, periods and overtime", "description": "Read an NBA score together with the period, game clock and overtime status.", "body": "<section><h2>The score is a running total</h2><p>NBA field goals count two points from on or inside the three-point line and three from outside it under the rule's conditions. A successful free throw counts one. The team score is the running total, not the number of baskets made.</p><p>A hypothetical 24-18 first-period score says nothing about the final winner. To understand the situation, read the period and time remaining alongside the points. A lead early in the game is a different snapshot from the same lead near the finish.</p></section><section><h2>The clock is not wall-clock duration</h2><p>NBA regulation periods last twelve minutes. Overtime periods last five. Those lengths describe playing time on the game clock, not how long a viewer will spend watching. Stoppages and intervals extend the real elapsed time.</p><p>When a scoreboard says 2:15, first check the period. Two minutes remaining in the first period and two minutes remaining in the fourth carry different stakes. A stopped clock may reflect a dead-ball situation, not a stuck feed.</p></section><section><h2>Overtime is another phase</h2><p>A tied NBA game goes into overtime under the rules. Do not call a level score after regulation a final draw. Read the overtime label and wait for the final result status before sharing the winner.</p><p>ScoreZaap's basketball view combines score and match state. If a feed revises a basket or the timing display, check the latest event before repeating an older snapshot. These explanations apply to NBA rules; do not assume every basketball competition has the same period lengths or scoring format.</p></section>", "sources": [["https://official.nba.com/rule-no-5-scoring-and-timing/", "NBA: Scoring and timing"]] }, { "slug": "nba-shot-clock-vs-game-clock", "category": "Basketball", "title": "NBA shot clock vs game clock", "description": "Understand why basketball has two clocks and why a reset does not mean time was added to the game.", "body": "<section><h2>Two clocks answer different questions</h2><p>The game clock tracks time remaining in the period. The shot clock limits the time allowed for a possession to produce a qualifying attempt under the NBA rules. A change on one clock does not automatically change the other.</p><p>A hypothetical display of 4:20 on the game clock and eight on the shot clock means there is more period time than possession time. The offence cannot simply hold the ball for the full four minutes.</p></section><section><h2>A shot is more than a throw toward the basket</h2><p>Under NBA Rule7, an attempt must meet the rule's requirements, including leaving the player's hand before the shot-clock period expires and then touching the rim or entering the basket. A release before the buzzer is not by itself the whole test.</p><p>Shot-clock resets depend on the event and the applicable rule. Do not assume every whistle restores a full new possession period. Likewise, an offensive rebound and a change of possession need not produce identical clock behaviour.</p></section><section><h2>Read the reset in context</h2><p>If the shot clock jumps while the game clock stays nearly unchanged, look for the preceding event. The reset governs the possession, not extra time added to the period. A short remaining shot-clock number can explain why a team rushes an otherwise ordinary-looking attack.</p><p>On ScoreZaap, use the event sequence and match phase with the score. If the data feed does not expose a shot clock, do not infer an exact value from the game clock. This is an NBA explainer, not a promise that every basketball league uses identical reset rules or that a live feed includes every timing field.</p></section>", "sources": [["https://official.nba.com/rule-no-7-24-second-clock/", "NBA: Shot clock"]] }, { "slug": "baseball-runs-hits-and-errors", "category": "Baseball", "title": "Baseball box scores: runs, hits and errors", "description": "Understand R, H and E and why hits do not directly equal runs on a baseball scoreboard.", "body": "<section><h2>Runs decide the score</h2><p>In a baseball line score, R, H and E commonly stand for runs, hits and errors. They describe different parts of the game. The score comparison is based on runs, not which side collected more hits.</p><p>A hypothetical side can have eight hits and three runs while its opponent has six hits and four runs. That is not an arithmetic contradiction. A hit records an offensive event; scoring a run depends on what happens as runners advance and the inning unfolds.</p></section><section><h2>Errors involve the official scorer</h2><p>MLB defines an error through the official scorer's judgment about a play an average fielder should have made, or a poor play allowing runners to advance. A batter does not always have to reach base for an error to be charged.</p><p>A dropped foul ball can extend an at-bat and lead to an error classification. Do not label every awkward play an error from a score alone. The official classification matters, and the line score can be corrected.</p></section><section><h2>Read innings before the totals</h2><p>An inning-by-inning line shows when runs were scored; the totals show the whole game. A late rally can explain why a side wins despite trailing for much of the contest. Adding the inning runs gives the run total, not the hit total.</p><p>MLB's scorekeeping guide uses abbreviations such as BB for a walk, K for a strikeout and HR for a home run. Fan notation can vary. On ScoreZaap, read the inning and status alongside runs, then use available match detail for context. A box score is a summary, not a complete account of every play.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/error", "MLB: Error"], ["https://www.mlb.com/glossary/miscellaneous/scorekeeping", "MLB: Scorekeeping"]] }, { "slug": "f1-gap-interval-and-fastest-lap", "category": "Formula 1", "title": "F1 timing: gap, interval and fastest lap", "description": "Read Formula 1 timing columns without confusing race position, neighbouring cars and a single quick lap.", "body": "<section><h2>Identify the reference car</h2><p>Timing columns compare drivers against a reference. An interval describes the time difference to a car ahead; a gap display can use another reference such as the leader. Read the column label and selected view before deciding which two cars a number compares.</p><p>In a hypothetical timing view, a driver could be ten seconds behind the leader but only two behind the car immediately ahead. Those figures can both be correct. They answer different questions rather than contradicting each other.</p></section><section><h2>Positions and lap times are different</h2><p>A fast individual lap does not automatically place a driver at the front of the race. Race position reflects the contest as a whole, while a lap time describes one circuit. Pit stops and the sequence of laps can make those stories diverge.</p><p>Formula1's glossary defines fastest lap as the quickest lap time set during a Grand Prix. It also notes that the championship bonus point used from 2019 to 2024 was removed from 2025. Do not repeat an older points explanation as if it were a current rule.</p></section><section><h2>Watch a trend, not one flash</h2><p>Official F1 live timing describes gap and interval updates on a loop or segment basis. A changing number is therefore not necessarily a complete new lap comparison. A short snapshot can hide where on the circuit each driver is.</p><p>Use several updates to follow whether a gap is growing or shrinking. ScoreZaap's F1 view is a race snapshot, not a claim to reproduce every official live-timing field. Check the session and status before comparing qualifying, practice and race numbers, and do not infer a missing interval from a simple position list.</p></section>", "sources": [["https://www.formula1.com/en/latest/article/f1-glossary-f-j.2g6grJVxT6dFCDpSmgoCQX", "Formula1: Glossary"], ["https://www.formula1.com/en/latest/article/you-speak-we-listen-the-latest-f1-live-timing-improvements.G9HzG04abEZ7wSosVjUfg", "Formula1: Live timing updates"]] }, { "slug": "cricket-follow-on-explained", "category": "Cricket", "title": "The follow-on: why a team bats twice in a row", "description": "Understand the optional follow-on, first-innings leads and the change to normal innings order.", "body": "<section><h2>It changes the order, not the score</h2><p>The follow-on belongs to a two-innings match. It lets the side batting first require its opponent to bat again after the opponent's first innings, rather than the leading side immediately beginning its own second innings. It is an option, not an automatic consequence of trailing.</p><p>The scoreboard can therefore show the same team beginning a new innings straight after its previous one ended. That is not a duplicate innings or a reset of the team's earlier score. Read the innings number as well as the team name.</p></section><section><h2>The lead requirement depends on duration</h2><p>MCC Law14 gives a 200-run threshold in a match of five days or more, 150 for three or four days, 100 for two days, and 75 for one day. These are leads after the relevant first innings, not targets for the next innings.</p><p>The Law also covers a lost first day and the number of days remaining when play starts. Check the actual match conditions before applying a threshold from memory. A shorter multi-day fixture is not automatically governed by the five-day number.</p></section><section><h2>The captain chooses</h2><p>The leading captain must notify the opposing captain and umpires when taking the option, and the notified decision cannot be changed. A large lead alone does not tell you whether the follow-on was enforced.</p><p>Watch the innings label and match status on ScoreZaap. A team following on still has its second innings to play; the first-innings deficit is not already a final losing margin. This guide explains the order of play, not a recommendation about whether a captain should enforce the option in a particular match.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-follow-on", "MCC: The follow-on"]] }, { "slug": "cricket-declaration-and-forfeiture", "category": "Cricket", "title": "Declared is not all out: understanding a cricket declaration", "description": "Read declared innings correctly and distinguish ending an innings from forfeiting one before it begins.", "body": "<section><h2>The batting captain can close an innings</h2><p>MCC Law15 allows the captain of the batting side to declare an innings closed when the ball is dead. The declared innings is treated as completed. A team does not have to lose every wicket before its innings can end this way.</p><p>A hypothetical 420/6 declared means the side stopped at that score with six wickets lost. It does not mean six was a special all-out threshold or that the remaining wickets vanished. The label explains why the innings ended.</p></section><section><h2>Time and runs are different resources</h2><p>A declaration can be understood as a decision to stop adding runs and allow the match to move on. The scorecard records the decision; it does not prove the captain's exact thinking about weather, bowling or time remaining.</p><p>Do not call a declaration a win. The opposition's innings and the remaining match conditions still determine the result. A lead, a target and a final margin are different numbers.</p></section><section><h2>Forfeiture happens before an innings starts</h2><p>The same Law allows a captain to forfeit an innings before it begins, which is also considered completed. That is different from batting for a period and then declaring. Read the official innings description instead of guessing from a missing batting row.</p><p>The captain notifies the opposing captain and umpires, and the notified decision cannot be changed. On ScoreZaap, combine the score with the innings label and result status. The illustrative total in this guide is not a claim about a live Test or another named fixture.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/declaration-and-forfeiture", "MCC: Declaration and forfeiture"]] }, { "slug": "cricket-tie-draw-and-win", "category": "Cricket", "title": "Tie, draw and win are different cricket results", "description": "Understand why equal scores are not automatically a tie and a lead is not automatically a victory.", "body": "<section><h2>Wait for the result conditions</h2><p>A current total is a snapshot, not the match result. MCC Law16 sets out when a side wins, when scores produce a tie and when a match is a draw. Match agreements and competition conditions can also affect how the result is determined.</p><p>A team ahead on runs while time remains has a lead. That is not itself proof of victory. In a multi-innings match, the order and completion of innings are essential to the result.</p></section><section><h2>Equal scores need more context</h2><p>Under the general Law, a tie requires the innings to be completed and the scores to be equal. Two live teams temporarily having the same number of runs does not finish the match. The next delivery may change that situation.</p><p>A draw is a different outcome: the match has not been determined as a win or tie under the relevant conditions. It does not mean the scores must be level. This is why a multi-day match can end in a draw with one side leading.</p></section><section><h2>Competition rules can add another stage</h2><p>A limited-overs competition may prescribe a tie-break procedure. Do not assume a particular extra stage from equal scores alone. Read the format, official status and competition conditions before saying how the winner will be decided.</p><p>ScoreZaap's Archives and confirmed result labels are the right place to check the outcome. Avoid translating a live advantage into a final margin. A result quoted to another person should include the fixture and confirmed outcome, not only a pair of innings totals.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/the-result", "MCC: The result"]] }, { "slug": "direct-and-indirect-free-kicks", "category": "Football", "title": "Direct vs indirect free kicks", "description": "Understand the referee signal and why the same shot into the goal can produce different restart outcomes.", "body": "<section><h2>The restart type matters</h2><p>A direct free kick can score directly into the opponents' goal. An indirect free kick cannot score that way without a further touch. Under IFAB Law13, an indirect kick sent directly into the opponents' goal results in a goal kick.</p><p>This is why a free kick's location alone does not tell you whether a direct shot can count. First identify the kind of restart. A dramatic strike can be invalid as a direct goal even if it crosses the line.</p></section><section><h2>Read the raised-arm signal</h2><p>The referee signals an indirect free kick by raising an arm. The Law describes keeping that signal until another player touches the ball, it goes out, or a direct goal is no longer possible. The signal is information about the restart, not simply a card or advantage gesture.</p><p>If the referee fails to signal and the ball is kicked directly into the goal, the Law requires the indirect free kick to be retaken. A scoreboard does not necessarily show the gesture, so a live event label may be the only context available.</p></section><section><h2>An own-goal restart is another trap</h2><p>If either a direct or indirect free kick is sent directly into the kicker's own goal, the restart is a corner kick. Do not apply the opponents' goal rule to the wrong end of the field. A further touch changes the factual situation.</p><p>On ScoreZaap, wait for the confirmed event and score after a disputed restart. A provider may initially show an apparent goal before correcting it. This guide explains the basic distinction; it does not adjudicate a real match from a headline score alone.</p></section>", "sources": [["https://www.theifab.com/laws/latest/free-kicks/", "IFAB: Free kicks"]] }, { "slug": "penalty-kick-vs-penalty-shootout", "category": "Football", "title": "A penalty kick is not a penalty shootout", "description": "Keep the match score separate from shootout tallies and understand the basic penalty-kick procedure.", "body": "<section><h2>A penalty during the match</h2><p>A penalty kick is a restart awarded under the Laws for the relevant direct-free-kick offence by a player inside their own penalty area or in the specified situations in the Law. It is not a separate contest that automatically replaces the match score.</p><p>If the kick produces a valid goal during play, that goal contributes to the match score. A hypothetical 1-0 becoming 1-1 after a penalty is an ordinary change to the running score, not a shootout result.</p></section><section><h2>The kick has a procedure</h2><p>IFAB Law14 requires the ball to be stationary on the penalty mark and the kicker to be identified. Other players have positioning requirements, and the defending goalkeeper has restrictions at the moment the ball is kicked. The referee signals before the kick proceeds.</p><p>The kicker must play the ball forward and cannot touch it again before another player has touched it. Outcomes involving encroachment or other offences depend on the details in the Law. Do not reduce every unusual kick to one universal retake rule.</p></section><section><h2>Shootout tallies belong to another phase</h2><p>A shootout is a method a competition can use to determine a winner. Its tally must be read separately from the match score. A display containing both figures is not asking you to add them into a new regulation score.</p><p>Read ScoreZaap's status and labels before sharing the result. A penalty awarded, a penalty scored and a shootout won describe three different events. Wait for the official decision during a review rather than turning an award into an assumed goal.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-penalty-kick/", "IFAB: The penalty kick"]] }, { "slug": "tennis-first-second-serve-and-let", "category": "Tennis", "title": "First serve, second serve and service let", "description": "Understand faults, double faults and why a let on second serve does not restore the first serve.", "body": "<section><h2>A fault creates a second chance</h2><p>Under the ITF rules, if the first service is a fault, the server serves again from the relevant half of the court. Two consecutive faults lose the point. A first fault is therefore not itself a point awarded to the receiver.</p><p>Read the point score after the completed point, not after every serving attempt. A missed first serve can happen without the game score changing, because the server still has the second service available.</p></section><section><h2>A service let repeats that service</h2><p>A served ball touching the net, strap or band can be a service let when the conditions in the rules are met. The particular service does not count and is taken again. Net contact alone is not enough to classify every serve as a let.</p><p>A service let does not cancel a previous fault. If a player has already missed the first serve and then serves a let, the repeat remains a second serve. It is not a return to two new attempts.</p></section><section><h2>Not every let has the same consequence</h2><p>The general let rule can replay the whole point, while the rules distinguish a service let on second service. For example, an interruption during a rally is not simply the same event as the ball clipping the net on a serve.</p><p>Alternative approved procedures can apply, so check the competition format. On ScoreZaap, use the point score and latest event together. This guide describes the standard rules; it does not claim every tournament uses the same let procedure or that a score feed lists each serving attempt.</p></section>", "sources": [["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: 2026 Rules of Tennis"]] }, { "slug": "tennis-service-order-and-change-of-ends", "category": "Tennis", "title": "Tennis service order and change of ends", "description": "Understand alternating service, doubles rotation and the difference between changing server and changing court ends.", "body": "<section><h2>Standard games alternate service</h2><p>At the end of a standard game, the receiver becomes the server and the server becomes the receiver for the next game. That change does not depend on who won the game. A break of serve wins a return game; it does not give the winner the next service game automatically.</p><p>Keep the serve marker separate from the games won. A player can lead in games while their opponent is serving, and a service change does not mean the set has ended.</p></section><section><h2>Doubles keeps a rotation</h2><p>In doubles, the team serving first chooses which partner starts that set. The other team chooses its server for the second game. The first team's other partner serves the third, and the second team's other partner the fourth; the rotation continues.</p><p>The receiving team also chooses which player receives the opening point in its first receiving game, with the partners alternating receiving positions according to the rules. Do not assume the more familiar player serves every important game.</p></section><section><h2>Ends and service are different changes</h2><p>Under the standard ITF change-of-ends rule, players switch at the end of the first, third and subsequent odd games of a set, with further provisions at set endings. Standard tie-breaks use a points-based change-of-ends pattern; alternatives exist.</p><p>A court-end switch and a server switch answer different questions. Read the game score, serve marker and format together on ScoreZaap. If a competition uses an alternative tie-break or scoring method, check its conditions before applying the standard pattern to every phase.</p></section>", "sources": [["https://www.itftennis.com/media/7221/2026-rules-of-tennis-english.pdf", "ITF: 2026 Rules of Tennis"]] }, { "slug": "baseball-earned-and-unearned-runs", "category": "Baseball", "title": "Earned vs unearned runs in a baseball box score", "description": "Understand why a pitcher's earned-run total can differ from the runs the opposing team scored.", "body": "<section><h2>Team runs and pitcher analysis differ</h2><p>A run counts in the team score whether the scorer classifies it as earned or unearned. The classification helps describe responsibility in the pitching record. It does not remove the run from the game result.</p><p>A hypothetical team can score four runs while a pitcher is charged with fewer earned runs. Read the column label before deciding the box score has failed to add up.</p></section><section><h2>The scorer reconstructs the situation</h2><p>MLB defines an earned run as one scoring against a pitcher without the benefit of an error or passed ball. The official scorer may need to judge whether the run would have scored without the defensive mishap. Unearned runs depend on an error or passed ball in that situation.</p><p>A pitcher leaving the game with runners on base can still be charged with earned runs if those runners later score. The pitcher on the mound at the instant a run crosses home is not always the one responsible for that runner.</p></section><section><h2>ERA does not tell the whole story</h2><p>Unearned runs do not count against a pitcher's ERA, but they still affect the team's chance to win. They can also add pitches and pressure. Calling a run unearned is a scoring classification, not a claim that it had no sporting cost.</p><p>On ScoreZaap, read runs, earned runs and the game result separately when detail is available. Avoid judging one outing from ERA alone or inventing a missing earned-run figure from the team total. Corrections to official scoring can alter the breakdown after an early live display.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/earned-run", "MLB: Earned run"], ["https://www.mlb.com/glossary/standard-stats/unearned-run", "MLB: Unearned run"]] }, { "slug": "cricket-boundary-four-vs-six", "category": "Cricket", "title": "Four vs six: what makes a cricket boundary", "description": "Understand grounded boundaries, a six off the bat and why running does not simply add to the allowance.", "body": "<section><h2>Look at how the ball reaches the boundary</h2><p>Under MCC Law 19, the usual allowance is four for a boundary four and six for a boundary six, unless determined differently under the Law. A six requires the ball to have been struck by the bat and first grounded beyond the boundary without touching the ground inside the field.</p><p>A ball bouncing inside the field before reaching the boundary is therefore not a six merely because its last bounce carries it over the rope. A touch by a fielder does not by itself rule out a six; the grounding conditions still matter.</p></section><section><h2>The rope is part of the boundary</h2><p>A ball touching the boundary marker can count as grounded beyond the boundary. The Law also covers a fielder touching the ball while grounded beyond it. These details explain why apparent saves need checking rather than a conclusion from the camera angle alone.</p><p>In a hypothetical ordinary four after the batters complete two runs, do not simply call the total six. The boundary provisions determine what is scored. Overthrows and completed running have additional rules, so unusual sequences need the actual facts.</p></section><section><h2>Read the confirmed event</h2><p>The boundary changes the team total, but its batting attribution depends on the delivery and contact. A boundary is not automatically four runs credited to the striker in every circumstance.</p><p>ScoreZaap links the changing total with the innings and match status. Wait for a confirmed event if a boundary save is under review. This example explains the general Law, not the outcome of a named live delivery.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/boundaries", "MCC: Boundaries"]] }, { "slug": "cricket-short-run-explained", "category": "Cricket", "title": "What is a short run in cricket?", "description": "Why running between the wickets can produce fewer credited runs than the batters appear to complete.", "body": "<section><h2>A turn must make good the ground</h2><p>MCC Law 18 defines a short run when a batter fails to make good their ground while turning for a further run. Running distance alone does not prove that each run qualifies. The umpire signal tells the scorers that a run must not be recorded.</p><p>For a hypothetical attempt at two runs with one unintentional short run and no other scoring event, the credited running is one rather than two. That is a scoring adjustment, not a wicket simply because the run was short.</p></section><section><h2>The next run can still count</h2><p>The Law says that although a short run shortens the succeeding one, the latter counts if completed. If both batters run short on the same run, that is only one short run, not two separate deductions for that same run.</p><p>Unintentional and deliberate short running are not treated as interchangeable situations. The deliberate case has separate provisions. A score display alone rarely tells you which the umpire has judged.</p></section><section><h2>Boundaries bring extra conditions</h2><p>For unintentional short running followed by a boundary, the Law generally disregards the short run, with exceptions involving an overthrow or a fielder's wilful act. Do not apply the simple two-run example to every boundary sequence.</p><p>On ScoreZaap, a corrected total can reflect the official scoring decision rather than a new shot. Read the event label alongside the total. This guide does not adjudicate a close turn at the crease from a scorecard alone.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/scoring-runs", "MCC: Scoring runs"]] }, { "slug": "lbw-cricket-basic-conditions", "category": "Cricket", "title": "LBW explained: more than a ball hitting the pad", "description": "Read the core leg-before-wicket conditions without assuming every pad contact is out.", "body": "<section><h2>Several conditions must be met</h2><p>MCC Law 36 makes LBW a set of conditions, not a rule that every pad hit loses a wicket. The delivery must not be a no-ball, and the ball must not have touched the bat before interception by the striker's person.</p><p>If it pitches rather than arriving full-pitch, it must pitch between the wickets or on the off side of the striker's wicket. A delivery pitching outside leg stump does not satisfy that pitching condition, even if it later turns towards the stumps.</p></section><section><h2>Impact and the path matter</h2><p>The impact normally has to be between wicket and wicket. When the striker makes no genuine attempt to play the ball with the bat, the Law allows impact outside the off-stump line as well. The ball must also have been going on to hit the wicket.</p><p>These are distinct questions: where it pitched, what it touched first, where it hit the striker and where it would have travelled. Satisfying one does not establish all the others.</p></section><section><h2>A scoreboard cannot decide the appeal</h2><p>A hypothetical pad contact on a legal ball is still only part of the evidence. Television-review procedures and competition conditions add their own operational context; this guide does not invent a review outcome.</p><p>ScoreZaap's wicket count follows the reported decision. Wait for confirmed status when a review is ongoing, rather than counting an appeal as a wicket. LBW names the dismissal; it does not by itself describe how many runs the team scored before that ball.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/leg-before-wicket", "MCC: Leg before wicket"]] }, { "slug": "cricket-run-out-and-completed-runs", "category": "Cricket", "title": "Run out: which batter is out and which runs count?", "description": "Understand a broken wicket, the batter's ground and why the unfinished run is not added.", "body": "<section><h2>The ground and wicket are linked</h2><p>MCC Law 38 concerns a batter out of their ground while the ball is in play and the wicket is fairly broken by a fielder's action, subject to the exceptions in the Law. A run does not have to be attempted for every run-out situation.</p><p>The batter dismissed is the one whose ground is at the end where the wicket is broken. The player closest to the camera or the batter who played the shot is not automatically the one out.</p></section><section><h2>A no-ball does not remove every risk</h2><p>Run out can apply even when no-ball has been called, but the Law contains specified exceptions. Do not reduce a no-ball to a promise that no dismissal is possible. Nor should every wicket broken by the wicketkeeper be labelled run out without checking the circumstances.</p><p>In a hypothetical attempted second run after one was completed, the run in progress when a run-out occurs is not scored. Runs already completed stand, together with applicable penalties, subject to the Law's specific cases.</p></section><section><h2>Read the score and dismissal separately</h2><p>A wicket and the team's running total can change in the same sequence. That is not necessarily a contradictory scorecard. The bowler's wicket figure and the team wicket count also need not rise together for this dismissal.</p><p>Use ScoreZaap's final event label and updated score rather than an assumed extra run. This guide explains the general scoring effect, not a decision about a named close replay or a non-striker leaving early.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/run-out", "MCC: Run out"]] }, { "slug": "football-yellow-red-card-explained", "category": "Football", "title": "Yellow vs red card: caution, dismissal and the score", "description": "Understand disciplinary cards without confusing a sending-off with a goal or match result.", "body": "<section><h2>A card is a disciplinary decision</h2><p>IFAB Law 12 says a yellow card communicates a caution and a red card communicates a sending-off. They are not points on the scoreboard. A hypothetical 0-0 match remains 0-0 merely because a player is cautioned.</p><p>Cards can be shown to players, substitutes, substituted players and team officials. A card icon next to the bench does not automatically mean a player currently on the field has left it. Read who received the sanction.</p></section><section><h2>Two cautions and a direct red differ</h2><p>Two separate cautionable offences require two cautions even if they occur close together. Receiving a second caution in the same match is a sending-off offence. A direct red is another disciplinary route, not proof that two yellow cards happened first.</p><p>The reason matters. Reckless play and excessive force are not interchangeable Law descriptions, and the sanction depends on the offence. Do not invent the reason for a card from a score provider's icon alone.</p></section><section><h2>The match can continue</h2><p>A sending-off is not by itself the final result. The remaining play and the competition's rules still matter. A dismissed on-field player cannot simply be replaced as if it were an ordinary tactical substitution.</p><p>ScoreZaap separates the score, match status and event stream. Use all three before sharing a result. A delayed card after advantage can appear after the original incident, so its timestamp need not be the moment the foul happened.</p></section>", "sources": [["https://www.theifab.com/laws/latest/fouls-and-misconduct/", "IFAB: Fouls and misconduct"], ["https://www.theifab.com/laws/latest/the-players/", "IFAB: The players"]] }, { "slug": "football-advantage-and-delayed-card", "category": "Football", "title": "Football advantage: why play continues after a foul", "description": "Understand the referee's advantage decision and why a card can arrive at the next stoppage.", "body": "<section><h2>Continuation is a decision</h2><p>IFAB Law 5 allows advantage when the non-offending team will benefit, and a return to the offence if the anticipated advantage does not follow at that time or within a few seconds. Continued play is not proof that no offence happened.</p><p>A hypothetical attacker retaining a promising move after a foul may therefore keep playing. It is not an extra goal, a permanent exemption from the Laws or a guarantee that the attack will succeed.</p></section><section><h2>The sanction may come later</h2><p>Law 12 describes disciplinary action at the next stoppage when advantage was played for an offence that would otherwise require a card. It also sets exceptions for an obvious goal-scoring opportunity or a promising attack.</p><p>That means delayed discipline needs the actual offence and outcome. Do not assume every advantage produces a yellow card, or that a later card must relate to a completely new incident. The referee's report supplies the decision, not the running score alone.</p></section><section><h2>Watch events as well as possession</h2><p>A provider may record the foul, advantage and eventual card at different points. Those labels explain the flow of play; the match score changes only with a valid scoring event.</p><p>On ScoreZaap, keep the confirmed event context beside the score. A player running forward after contact does not tell you enough to adjudicate a real advantage decision. This guide describes the rule structure without pretending to be the referee for a live match.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-referee/", "IFAB: The referee"], ["https://www.theifab.com/laws/latest/fouls-and-misconduct/", "IFAB: Fouls and misconduct"]] }, { "slug": "football-substitution-rules-basics", "category": "Football", "title": "Football substitutions: player change vs match event", "description": "Read substitutions correctly and check the competition's limits instead of assuming one universal number.", "body": "<section><h2>The competition sets the permitted number</h2><p>IFAB Law 3 sets a framework for substitutions, including a maximum of five in official competitions, with competition rules determining the number permitted. There are additional provisions for opportunities, extra time and other formats. Do not assume every match uses an identical allowance.</p><p>A player change is a roster event within the match. It does not add a goal or restart the match clock. A hypothetical substitution at 1-0 leaves the score at 1-0 unless another scoring event occurs.</p></section><section><h2>The change follows a procedure</h2><p>The referee must be informed before a substitution. The substitute enters during a stoppage, at the halfway line, after the departing player has left and after the referee's signal. The procedure matters; a bench player does not become an on-field player merely by standing up.</p><p>Law 3 describes the substitution as completed when the substitute enters. Return substitutions exist only in the specified permitted settings. Do not assume a replaced player can re-enter an elite match because a grassroots game allows it.</p></section><section><h2>A substitution does not explain its own motive</h2><p>A live feed naming two players establishes the change, not necessarily an injury, tactical reason or coach's private view. Avoid inventing that story from timing alone.</p><p>ScoreZaap's score and event labels provide different pieces of context. Check the actual competition conditions for limits and additional allowances, and use the confirmed event to identify who left and who entered. This example is not a report of a named fixture.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-players/", "IFAB: The players"]] }, { "slug": "football-goalkeeper-eight-second-rule", "category": "Football", "title": "Goalkeeper eight-second rule: the restart explained", "description": "IFAB's current Law 12 uses a corner kick for holding the ball beyond eight seconds.", "body": "<section><h2>Control starts the count</h2><p>Under IFAB's current Law 12, a goalkeeper controlling the ball with the hands or arms inside the penalty area for more than eight seconds before release concedes a corner kick. The referee decides when control begins and visibly counts the final five seconds with a raised hand.</p><p>Control is a defined situation, not every accidental contact with a hand. The Law describes examples such as holding the ball between the hands or between a hand and a surface, bouncing it, and tossing it in the air.</p></section><section><h2>This is not an automatic penalty</h2><p>The specified restart is a corner kick, not a penalty kick and not an indirect free kick borrowed from an older version of the Law. That distinction matters when reading a current football event feed or an older explanation online.</p><p>The corner is taken from the corner area nearest to the goalkeeper's position when penalised. The goalkeeper also cannot be challenged while controlling the ball with the hands or arms, so the countdown does not invite opponents to kick it away.</p></section><section><h2>Check the version and event</h2><p>Competitions can have their own implementation context, and archived matches must be read under the rules applying then. Do not project a current provision backwards without checking the season.</p><p>A hypothetical 0-0 game stays 0-0 after this offence; a corner is an opportunity, not a goal already scored. ScoreZaap's confirmed event and score should be read together. This guide explains the currently retrieved IFAB Law, not a timing judgment from an unseen live incident.</p></section>", "sources": [["https://www.theifab.com/laws/latest/fouls-and-misconduct/", "IFAB: Fouls and misconduct"]] }, { "slug": "cricket-caught-fair-catch", "category": "Cricket", "title": "Caught in cricket: why holding the ball is not enough", "description": "Understand bat contact, a fair catch and why a no-ball changes the dismissal.", "body": "<section><h2>The delivery and contact come first</h2><p>MCC Law 33 requires a delivery that is not a no-ball to touch the striker's bat without previously contacting a fielder. A fielder must then hold it as a fair catch before it touches the ground. A ball secured after bouncing is not that dismissal.</p><p>Bat contact and contact with the striker's person are not interchangeable evidence. A scoreboard cannot tell you whether a faint edge occurred; use the confirmed decision rather than guessing from a wicket appeal.</p></section><section><h2>Completing the catch matters</h2><p>The Law describes a catch starting with first contact by a fielder and ending when the fielder has complete control over both the ball and their own movement. A momentary touch or a ball popping out is not automatically a completed catch.</p><p>Boundary conditions also matter. An apparent catch near the rope requires the relevant grounding facts. Do not judge it from a still image alone or assume an outstretched hand establishes a legal catch.</p></section><section><h2>Read the dismissal and total together</h2><p>When the striker is caught, completed running from that delivery does not score under Law 33; applicable penalty runs remain. That differs from the scoring effects of a run out.</p><p>ScoreZaap reports the provider's confirmed wicket and score. A hypothetical apparent edge followed by a review is still pending until the decision is reported. This guide describes the Law, not a close-catch ruling for a named match.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/caught", "MCC: Caught"]] }, { "slug": "cricket-bowled-bat-pad-deflection", "category": "Cricket", "title": "Bowled: a bat or pad deflection can still hit the wicket", "description": "Why contact with the striker does not automatically prevent a bowled dismissal.", "body": "<section><h2>A legal delivery must break the wicket</h2><p>MCC Law 32 says the striker is out bowled when a delivery, not being a no-ball, fairly breaks their wicket. It can first touch the striker's bat or person. An inside edge onto the stumps can therefore still be bowled.</p><p>A ball striking the stumps is not enough by itself if the wicket has not been fairly broken. That separate requirement matters when a ball brushes a stump without the necessary consequence.</p></section><section><h2>Another person changes the route</h2><p>If the ball touches another player or an umpire before striking the wicket, Law 32 does not give a bowled dismissal. Other dismissal provisions may be relevant depending on the facts. Do not label every broken wicket bowled from the score alone.</p><p>For a hypothetical legal ball deflected from the striker's pad onto the wicket, pad contact is not an exemption. LBW conditions are not needed to establish bowled when its own requirements are satisfied.</p></section><section><h2>The dismissal has priority</h2><p>The Law gives bowled priority when its conditions are met, even if another dismissal could also be justified. That helps explain the final scorecard label rather than proving the order of every possible appeal.</p><p>On ScoreZaap, wait for the reported decision if the delivery is being checked. A no-ball review can change the apparent wicket state. This explanation concerns the general Law and does not invent the outcome of a live replay.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/bowled", "MCC: Bowled"]] }, { "slug": "cricket-stumped-vs-run-out", "category": "Cricket", "title": "Stumped vs run out: the attempted run matters", "description": "Read a wicketkeeper dismissal with the delivery, ground and running attempt in context.", "body": "<section><h2>Stumped has specific conditions</h2><p>Under MCC Law 39, stumped requires a delivery not called no-ball, the striker out of their ground and no attempted run, with the wicket fairly put down by the wicketkeeper without another fielder's intervention. The Law also contains exceptions.</p><p>A striker stepping forward to play and missing can fit a different situation from a batter attempting a run. Simply seeing the keeper remove the bails does not tell you which conditions apply.</p></section><section><h2>Wide and no-ball are not the same</h2><p>A stumping can occur from a wide; the one-run wide penalty stands when the striker is dismissed that way. A no-ball does not satisfy the stumped requirement. These two extras must not be treated as identical.</p><p>The Law also explains an important endpoint: if the wide penalty itself concludes the match, the stumping cannot then occur. Do not keep adding events after the match has already ended under the relevant conditions.</p></section><section><h2>Check the confirmed label</h2><p>A ball rebounding from the wicketkeeper's person or equipment onto the stumps can count as the keeper putting down the wicket. Leaving the ground to avoid injury has a specific exception.</p><p>ScoreZaap's final dismissal label is useful context beside the total. This guide does not decide whether a particular foot was grounded in an unseen frame. Use the official decision for that close call, not a general description alone.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/stumped", "MCC: Stumped"], ["https://www.lords.org/mcc/the-laws-of-cricket/run-out", "MCC: Run out"]] }, { "slug": "cricket-dead-ball-counts-over", "category": "Cricket", "title": "Dead ball in cricket: does the delivery count?", "description": "Why dead ball does not always mean a replacement delivery or erased runs.", "body": "<section><h2>Dead describes the end of play</h2><p>MCC Law 20 includes a ball becoming dead after a boundary, a dismissal or when finally settled in the wicketkeeper's or bowler's hands. It does not always mean an unusual incident or a delivery that must be repeated.</p><p>The ball comes into play again when the bowler starts the run-up or, without a run-up, begins the bowling action. Once a delivery is dead, revoking a decision cannot make that same delivery live again.</p></section><section><h2>Counting depends on the circumstances</h2><p>The Law distinguishes whether the striker had an opportunity to play. It also lists exceptions, including specified distractions and other offences. A dead-ball label alone does not settle whether the over count advances.</p><p>A hypothetical ordinary boundary ends that passage of play but does not erase the boundary or automatically require a replacement ball. A distraction before a genuine opportunity can involve a different counting outcome.</p></section><section><h2>Separate the signal from the score</h2><p>No-ball and wide calls have their own consequences for counting. Do not apply one shortcut to every dead-ball event. Over and time should not be called until the ball is dead under the relevant provisions.</p><p>On ScoreZaap, read the score, valid-ball count and event label together. An over display staying unchanged can be correct in one case and inappropriate in another. The guide explains the distinction without ruling on a named delivery from incomplete commentary.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/dead-ball", "MCC: Dead ball"]] }, { "slug": "football-corner-kick-direct-goal", "category": "Football", "title": "Corner kick rules: can a corner go straight in?", "description": "Understand a direct goal, the ball becoming live and why a corner is not already a scoring event.", "body": "<section><h2>A goal can come directly from a corner</h2><p>IFAB Law 17 permits a goal directly from a corner kick into the opposing team's goal. If it directly enters the kicker's own goal instead, the restart is a corner for the opponents. The direction matters.</p><p>A corner award itself does not change the score. In a hypothetical 0-0 match, the attacking side receiving a corner still needs a valid goal before the scoreboard becomes 1-0.</p></section><section><h2>The restart has a procedure</h2><p>The ball must be stationary in the relevant corner area. It is in play when kicked and clearly moves; it does not need to leave the corner area first. The corner flag must not be moved.</p><p>Opponents must remain at least 9.15 metres from the corner arc until the ball is in play. After taking the kick, the kicker cannot play it again until another player has touched it.</p></section><section><h2>Not every corner follows a defender touch</h2><p>The usual boundary case involves the whole ball crossing the goal line after last touching a defender, with no goal scored. Current rules also specify corner restarts for certain delay offences. The label alone need not prove a blocked shot.</p><p>ScoreZaap separates the corner event from any later goal. Wait for the confirmed scoring decision if a ball curls directly into the net. This guide covers the basic restart rather than a disputed goal in an unseen match.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-corner-kick/", "IFAB: The corner kick"]] }, { "slug": "football-throw-in-direct-goal", "category": "Football", "title": "Throw-in rules: why a direct throw cannot score", "description": "Understand the touchline restart, foot position and the need for another touch before a goal.", "body": "<section><h2>Directly into the net is not a goal</h2><p>IFAB Law 15 does not allow a goal directly from a throw-in. A throw directly into the opponents' goal produces a goal kick; directly into the thrower's own goal produces a corner kick.</p><p>A long throw is therefore not an exception merely because it travels a long distance. A touch by another player changes the facts, so first establish whether the throw really went in directly.</p></section><section><h2>The throw has a procedure</h2><p>At release, the thrower must face the field, have part of each foot on or behind the touchline and on the ground, and throw with both hands from behind and over the head. The restart is taken where the ball left the field.</p><p>Opponents must stand at least two metres from the point on the touchline where the throw is taken. A ball that enters play and one that never enters it can require different outcomes.</p></section><section><h2>The touchline and score are separate</h2><p>The usual award follows the whole ball crossing the touchline, last touched by the opposing team. Current delay provisions also need checking, rather than assuming every throw-in label describes a ball rolling out.</p><p>A hypothetical throw-in at 2-1 leaves the match at 2-1 unless a valid later goal occurs. Use ScoreZaap's confirmed event and score together. This guide does not decide whether a real thrower's heel was grounded from an unseen camera frame.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-throw-in/", "IFAB: The throw-in"]] }, { "slug": "football-goal-kick-in-play", "category": "Football", "title": "Goal kick rules: when is the ball in play?", "description": "A goal kick need not leave the penalty area before another player can receive it.", "body": "<section><h2>A clear movement starts play</h2><p>IFAB Law 16 says the ball is in play when it is kicked and clearly moves. It does not have to leave the penalty area first. The ball must be stationary and kicked from within the goal area by a defending player.</p><p>A defender receiving a short goal kick inside the penalty area is not automatically committing an offence. Do not apply an old area-exit requirement to the currently retrieved Law.</p></section><section><h2>Opponent positioning still matters</h2><p>Opponents must be outside the penalty area until the ball is in play. The Law separately handles opponents who did not have time to leave and those who touch or challenge before play starts. These cases should not be collapsed into one rule.</p><p>The kicker cannot play the ball again before another player has touched it. A second touch and a legal pass to a team-mate are different situations, even if both happen near the goal area.</p></section><section><h2>A direct goal is possible at one end</h2><p>A goal may be scored directly against the opponents from a goal kick. Directly into the kicker's own goal instead yields a corner for the opponents. A goal kick does not add a goal merely because of its name.</p><p>On ScoreZaap, use the reported restart and confirmed score. A hypothetical short pass at 0-0 is still 0-0. This explanation covers the basic procedure, not every delay sanction or a disputed pressing incident in a named match.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-goal-kick/", "IFAB: The goal kick"]] }, { "slug": "football-dropped-ball-goal-rule", "category": "Football", "title": "Dropped ball: why one player cannot score alone", "description": "Understand when the restart becomes live and why multiple touches by one player are not enough for a goal.", "body": "<section><h2>The ground starts play</h2><p>IFAB Law 8 says a dropped ball is in play when it touches the ground. All players except the recipient must stay at least four metres away until then. A premature kick before ground contact is not ordinary live play.</p><p>After it becomes live, an opponent respecting the required distance can play it. The named recipient is not guaranteed exclusive possession indefinitely, so the restart should not be interpreted as an uncontested goal opportunity.</p></section><section><h2>Two players must touch before a goal</h2><p>If a dropped ball goes into a goal without touching at least two players, the Law prescribes a restart instead of a goal. Into the opponents' goal means a goal kick; into the team's own goal means a corner kick.</p><p>A hypothetical recipient dribbling with several touches and then shooting directly into the net still involves only one player. Count distinct players, not the number of foot contacts.</p></section><section><h2>A further touch changes the facts</h2><p>A pass to another player or a touch by an opponent can satisfy the two-player element. Other Laws still apply: satisfying this requirement is not a guarantee that every later shot counts.</p><p>ScoreZaap's confirmed goal and restart labels matter more than an apparent ball entering the net. This guide explains the scoring restriction and live-ball moment without prescribing the recipient in every situation or inventing a decision for a real incident.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-start-and-restart-of-play/", "IFAB: The start and restart of play"]] }, { "slug": "cricket-over-valid-deliveries", "category": "Cricket", "title": "Six valid balls: when a cricket over is complete", "description": "Understand the over call, invalid deliveries and why six attempts do not always finish an over.", "body": "<section><h2>Count valid balls, not every attempt</h2><p>MCC Law 17 provides six valid balls in an over, bowled from each end alternately. A wide or no-ball is not counted as one of those six. Certain dead-ball circumstances also affect counting.</p><p>In a hypothetical over with six valid balls and one wide delivery, seven deliveries have been attempted but the over still contains six valid balls. The extra does not create a seven-ball regulation over.</p></section><section><h2>The umpire calls over</h2><p>The umpire calls over after six valid balls and when the ball is dead. A display reaching a neat decimal-looking number is not what gives a delivery its status. Overs notation counts balls rather than tenths.</p><p>The Law also covers an umpire miscount: the over as counted by the umpire stands. Do not silently invent a correction in a real fixture because a viewer counted differently from the official record.</p></section><section><h2>The end changes, not the innings</h2><p>Completing an over normally changes the bowling end. It does not automatically close the innings or reset the batting score. The format and remaining overs determine the larger innings context.</p><p>Use ScoreZaap's total, over count and innings label together. The illustrative wide is not a claim about a current match. For an unusual interruption, check the official event record and competition conditions rather than assuming every dead-ball call has the same effect.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/the-over", "MCC: The over"]] }, { "slug": "cricket-bowler-changing-during-over", "category": "Cricket", "title": "Can a bowler change during an over?", "description": "MCC Law 17 covers an incapacitated or suspended bowler and the rules for the replacement.", "body": "<section><h2>An unfinished over has a special case</h2><p>MCC Law 17 allows another bowler to complete an over if the original bowler is incapacitated or suspended during it. The umpire calls and signals dead ball when the bowler is incapacitated while running up or during the over.</p><p>That is different from an ordinary captain's change after a completed over. A partial bowling figure beside a player can reflect this special situation, not necessarily a broken scorecard.</p></section><section><h2>The replacement has restrictions</h2><p>The replacement must not have bowled any part of the previous over, and cannot bowl any part of the next one. A bowler may change ends, but cannot bowl consecutive overs or parts of each of two consecutive overs in the same innings.</p><p>For a hypothetical injured bowler after two valid balls, the remaining valid balls can be delivered by an eligible replacement. The team total does not reset, and the batter's innings does not restart.</p></section><section><h2>Do not infer the reason from statistics</h2><p>Two bowlers sharing an over does not prove a particular diagnosis or disciplinary story. The official event description supplies the reason. A fractional over figure is a count, not an explanation of what happened.</p><p>ScoreZaap's bowling rows and commentary provide different context. Read them together and use the Law for the replacement framework. This guide does not claim an injury occurred in a named fixture or choose which player should complete a real over.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws-of-cricket/the-over", "MCC: The over"]] }, { "slug": "football-goal-line-whole-ball", "category": "Football", "title": "When does a football goal count? The whole-ball rule", "description": "A ball touching or partly crossing the goal line is not enough to establish a goal.", "body": "<section><h2>The entire ball must cross</h2><p>IFAB Law 10 says a goal is scored when the whole ball passes over the goal line between the posts and under the crossbar, provided the scoring team has committed no offence. A ball partly over the line does not meet that requirement.</p><p>The goal frame and the line describe a three-dimensional boundary. A camera angle can make partial crossing look complete, so a screenshot alone may be insufficient to judge a close incident.</p></section><section><h2>Entering the net is not every condition</h2><p>A ball in the net can still be followed by a decision that no goal counts because of an offence or a restart restriction. A direct goalkeeper throw into the opponents' goal, for example, yields a goal kick under Law 10.</p><p>A hypothetical apparent goal at 1-1 is not safely 2-1 until the event is confirmed. A score feed can briefly show a goal before an official correction. Treat the match state as updateable, not a permanent verdict at first sight.</p></section><section><h2>The final score decides the basic outcome</h2><p>The side with more goals wins; equal goals or no goals produce a draw under the basic Law. Competition rules can prescribe a further winner-determining method where required. Do not assume all equal scores end the competition.</p><p>ScoreZaap separates live totals from confirmed results. This guide explains what a goal requires, without adjudicating a real goal-line review or inventing a scorer from an unexplained total change.</p></section>", "sources": [["https://www.theifab.com/laws/latest/determining-the-outcome-of-a-match/", "IFAB: Determining the outcome"]] }, { "slug": "football-offside-restart-exceptions", "category": "Football", "title": "No offside directly from a throw-in, corner or goal kick", "description": "Understand the narrow restart exceptions without assuming offside is disabled for the whole move.", "body": "<section><h2>Three direct receipts are exempt</h2><p>IFAB Law 11 states there is no offside offence when a player receives the ball directly from a goal kick, throw-in or corner kick. Directly is the important limit: it describes the receipt from that restart.</p><p>A hypothetical attacker beyond the defenders receiving a team-mate's throw-in is not penalised merely for that position on the direct receipt. Other offences can still occur, so the exception is not immunity from the rest of the Laws.</p></section><section><h2>A later touch can create a new question</h2><p>After another team-mate touches or plays the ball, the usual offside assessment can apply to the next phase. A corner does not switch off offside for every pass that follows.</p><p>The corner taker can also be in an offside position in a later phase after taking the kick. The restart's original label is not enough to establish the status at a subsequent touch.</p></section><section><h2>A free kick is not on the list</h2><p>Do not add free kicks or kick-offs to these three direct-receipt exceptions. Apply the relevant Law and actual position at the team-mate's touch rather than a broad claim that all restarts are exempt.</p><p>ScoreZaap's event labels give context, but a basic scorecard cannot locate every player at each touch. Wait for the confirmed decision in a real match. This guide explains the narrow exception, not a ruling from incomplete match data.</p></section>", "sources": [["https://www.theifab.com/laws/latest/offside/", "IFAB: Offside"]] }, { "slug": "baseball-home-run-runs-count", "category": "Baseball", "title": "A home run is one hit, but can score several runs", "description": "Read a home run total separately from the team runs added on the play.", "body": "<section><h2>The hitter completes the bases</h2><p>MLB defines a home run as a fair hit on which the batter scores without being put out or benefiting from an error. Most travel over the outfield fence in fair territory, but inside-the-park home runs also exist.</p><p>A home run is one hit in the hitter's record. It can produce more than one team run because runners already on base score too. The team run total is not simply a count of home-run swings.</p></section><section><h2>The base situation changes the yield</h2><p>In a hypothetical solo home run, only the batter scores: one run. With two runners already on base, that home run can score three. With the bases loaded, it can score four, commonly called a grand slam.</p><p>Those are worked examples, not reports of a current game. Do not add the hitter's one hit as another run after already counting everyone who scored. Hits and runs are different box-score columns.</p></section><section><h2>Not every ball over a fence is fair</h2><p>The fair-territory condition matters. The MLB glossary also describes cases involving the foul pole or a fielder contact before the ball clears the wall. Unusual plays need the actual ruling rather than a distance estimate.</p><p>On ScoreZaap, a score rise of four alone does not prove a grand slam. Read a confirmed event description before naming the play. The live score shows the team total; the source account explains how those runs arrived.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/home-run", "MLB: Home run"]] }, { "slug": "baseball-rbi-vs-run-scored", "category": "Baseball", "title": "RBI vs run scored: two different baseball statistics", "description": "Why a hitter can drive in a run without scoring one, or score without an RBI.", "body": "<section><h2>An RBI is a credited contribution</h2><p>MLB's glossary describes an RBI as credit in most cases where a plate appearance results in a run. A run scored belongs to the player who completes the bases. The same player need not receive both statistics on a play.</p><p>In a hypothetical single driving a runner home, the hitter can receive an RBI while the runner receives the run scored. That is not two team runs: the columns describe different contributions to one scoring play.</p></section><section><h2>A hit is not always required</h2><p>A bases-loaded walk or hit by pitch can produce an RBI. A batter can also receive one when making an out if a run scores, subject to the exceptions. RBIs are not simply the number of run-scoring hits.</p><p>MLB notes exceptions including a run scoring because of an error or a ground-ball double play. Do not assign the credit solely because a run appeared during the batter's plate appearance.</p></section><section><h2>Keep individual totals out of the team sum</h2><p>Adding RBIs to runs scored would count contributions again rather than reconstruct the scoreboard. A team's final run total is already the score, not a base number awaiting the addition of player credits.</p><p>ScoreZaap's team score and box-score statistics answer different questions. Wait for the official scoring attribution before describing a real play as an RBI. This guide uses a labelled hypothetical single, not invented commentary for a named game.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/runs-batted-in", "MLB: Runs batted in"]] }, { "slug": "baseball-walk-base-on-balls", "category": "Baseball", "title": "What does BB mean in baseball? Walks explained", "description": "Read a base on balls without confusing it with a hit or an automatic team run.", "body": "<section><h2>Four balls can award first base</h2><p>MLB calls a walk a base on balls, abbreviated BB. The glossary describes a batter refraining from swinging at four pitches outside the strike zone and being awarded first base.</p><p>A walk is not a hit merely because the batter reaches a base. A hypothetical walk with the bases empty adds a runner, not an automatic run to the team score. The player must still advance around the bases to score.</p></section><section><h2>The base situation matters</h2><p>A bases-loaded walk can force a run in and produce an RBI, as described in MLB's RBI glossary. That scoring effect depends on the occupied bases, not just the BB label.</p><p>An intentional walk also counts as a walk for the record. The statistic does not by itself prove the pitcher accidentally lost control or identify the team's tactical reason.</p></section><section><h2>Separate reaching base from scoring</h2><p>A scorecard may show a walk while the team total remains unchanged. That is normal when no run scores on the play. Conversely, a bases-loaded walk can change the score without increasing the hit count.</p><p>Use ScoreZaap's event context beside the runs and hits columns. This guide explains the abbreviation and basic credit, not every strike-zone ruling or a prediction about what a pitcher will throw next. The examples are not claimed live events.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/walk", "MLB: Walk"], ["https://www.mlb.com/glossary/standard-stats/runs-batted-in", "MLB: Runs batted in"]] }, { "slug": "baseball-strikeout-uncaught-third-strike", "category": "Baseball", "title": "Strikeout vs out: the uncaught third-strike exception", "description": "Why a recorded K can occasionally appear even when the batter reaches first base.", "body": "<section><h2>Three strikes create a strikeout</h2><p>MLB's glossary defines a strikeout through three swinging or called strikes and records it as K. A backwards K indicates a called third strike without a swing.</p><p>A foul ball ordinarily cannot be the third and final strike; a caught foul tip can be. Those are different contacts despite both sounding like a ball touched by the bat.</p></section><section><h2>A third strike may not complete an out</h2><p>If the catcher does not cleanly catch the third strike, the batter may attempt first base when it is unoccupied or when there are two outs. Even if the batter reaches safely, both pitcher and batter receive a strikeout in the scorebook.</p><p>A hypothetical strikeout followed by the batter reaching first is therefore not automatically a scoring error. The statistical K and the completed-out count describe different facts in this exception.</p></section><section><h2>The inning context is essential</h2><p>First-base occupancy and the number of outs matter to the opportunity to run. Do not present every dropped third strike as an unrestricted free attempt at first. The actual play can include a throw and a subsequent out.</p><p>ScoreZaap's team score alone does not prove how a strikeout ended. Read the event or official scoring record before naming the exception in a real match. This guide describes MLB's basic explanation without inventing a play-by-play sequence.</p></section>", "sources": [["https://www.mlb.com/glossary/standard-stats/strikeout", "MLB: Strikeout"]] }, { "slug": "cricket-hit-wicket-no-ball", "category": "Cricket", "title": "Hit wicket: timing and no-ball exceptions", "description": "A batter breaking their own wicket is not always dismissed hit wicket.", "body": "<section><h2>The batting action matters</h2><p>MCC Law 35 covers the striker breaking their wicket with bat or person after the bowler enters the delivery stride, while the ball is in play. It includes preparing for or receiving a delivery and setting off immediately for the first run after playing or playing at it.</p><p>Imagine a striker stepping back to play a legal delivery and knocking a bail off with a foot. The relevant question is whether the action meets those conditions, rather than whether the ball itself touched the stumps.</p></section><section><h2>Later running is different</h2><p>The Law excludes breaking the wicket during running other than setting off immediately for that first run. Trying to avoid being run out or stumped, or trying to avoid a throw, is also excluded from hit wicket.</p><p>If the striker puts down the wicket before the bowler enters the delivery stride, the specified response is dead ball. The same visible fallen bail can therefore have different meaning depending on when it happens.</p></section><section><h2>No-ball changes the dismissal</h2><p>A no-ball is another listed exception: the striker is not out hit wicket from that delivery. The Law does not give the same exclusion for a wide. When hit wicket is awarded, the one-run wide penalty and applicable five-run penalties can stand.</p><p>Read the final dismissal label alongside the extra and valid-ball count. Those fields help explain why an apparent wicket is removed after a no-ball check. A photograph of fallen bails alone cannot establish the final decision.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/hit-wicket", "MCC: Hit wicket"]] }, { "slug": "cricket-hit-ball-twice-guard-wicket", "category": "Cricket", "title": "Hit the ball twice: protecting the wicket is a limited exception", "description": "Why a deliberate second strike may be legal for defence but not for scoring.", "body": "<section><h2>Not every second contact is an offence</h2><p>MCC Law 34 concerns the striker wilfully striking the ball again before it has touched a fielder, while the ball remains in play. The initial contact can be with the bat or the striker's person. This is not a shortcut that makes every accidental two-contact shot a dismissal.</p><p>A deliberate second stroke solely to guard the wicket has a specific exception. Before a fielder touches the ball, the striker may use the bat or body, but not a hand that is not holding the bat, for that limited purpose.</p></section><section><h2>Defence does not permit stopping a catch</h2><p>The exception does not allow the striker to prevent a catch by making a second strike in defence of the wicket. Law 34 points to the obstruction provisions for that case. No-ball status also needs separate attention; it does not simply erase every second-strike rule.</p><p>Consider a ball rolling back towards the stumps after a shot. A lawful defensive tap is different from deliberately hitting it again to add distance and run. The purpose and sequence matter.</p></section><section><h2>Lawful defence is not another scoring shot</h2><p>For a lawful second strike, the Law sets a dead-ball procedure and disallows running scores, with specified treatment of no-ball and penalty awards. Do not treat a ball sent to the rope after that defensive tap as an ordinary four.</p><p>The bowler does not receive wicket credit for a hit-the-ball-twice dismissal. The team wicket total and the bowler's personal wicket count can therefore change differently without the scorecard being wrong.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/hit-the-ball-twice", "MCC: Hit the ball twice"]] }, { "slug": "cricket-timed-out-ready-not-arrival", "category": "Cricket", "title": "Timed out: being ready matters more than reaching the pitch", "description": "Understand MCC's three-minute rule and why competition conditions must also be checked.", "body": "<section><h2>The clock follows a wicket or retirement</h2><p>Under the retrieved MCC Law 40, the incoming batter must be ready to receive, or the other batter ready to receive the next ball, within three minutes of a dismissal or retirement unless Time has been called. The wording is about readiness, not merely arrival near the wicket.</p><p>A hypothetical batter walking onto the field before three minutes but still unable to receive is not automatically safe because they crossed the boundary. The relevant requirement concerns the next delivery.</p></section><section><h2>Do not apply one number to every competition</h2><p>This guide describes the MCC Law as retrieved. A competition can have its own playing conditions, so check those before applying this three-minute figure to a particular international or domestic match.</p><p>The distinction matters when commentary mentions a different limit. Do not call the commentary false solely because a general Laws guide gives three minutes. First establish which playing conditions govern the game.</p></section><section><h2>The wicket does not belong to the bowler</h2><p>MCC says the bowler does not get credit for timed out. The side can therefore lose a wicket without a bowler adding one to their figures. For extended delays with no incoming batter, the Law points to a separate match-award procedure.</p><p>A live score alone cannot prove when readiness was achieved or whether Time had been called. Use the reported dismissal and the match's governing conditions, rather than timing an edited television clip.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/timed-out", "MCC: Timed out"]] }, { "slug": "cricket-obstructing-field-accidental-contact", "category": "Cricket", "title": "Obstructing the field: accidental contact is not enough", "description": "Read intention, injury avoidance and catch interference before interpreting this dismissal.", "body": "<section><h2>The Law concerns wilful obstruction</h2><p>MCC Law 37 allows either batter to be dismissed for wilfully attempting to obstruct or distract the fielding side by word or action while the ball is in play, subject to its exceptions. It also has a rule for the striker deliberately using a hand not holding the bat when receiving the delivery.</p><p>A ball merely touching a running batter does not, by itself, establish that the batter acted wilfully. The action and circumstances need judging, not just the resulting deflection.</p></section><section><h2>Accident and injury avoidance have exceptions</h2><p>The Law excludes accidental obstruction and obstruction to avoid injury. A lawful second strike to protect the striker's wicket is also addressed, but catch interference has further conditions.</p><p>When wilful obstruction prevents a catch from a legal delivery, the striker can be dismissed even if the other batter caused the obstruction. This is why identifying who acted does not always identify who is out.</p></section><section><h2>No-ball is not blanket protection</h2><p>The obstruction Law can apply even when no-ball is called. Catch-related no-ball cases have their own detail, including the lawful defensive second-strike exception. Avoid assuming every apparent obstruction is ignored on a no-ball.</p><p>Returning the live ball to a fielder without a fielder's consent can also fall under this Law. The bowler gets no wicket credit for obstruction. Use the final decision and scoring record for a named incident; this guide is not evidence of a batter's intention.</p></section>", "sources": [["https://www.lords.org/mcc/the-laws/obstructing-the-field", "MCC: Obstructing the field"]] }, { "slug": "football-penalty-rebound-post-vs-save", "category": "Football", "title": "Penalty rebounds: the post and goalkeeper are different", "description": "Why the original kicker can follow a save but not immediately follow a post rebound.", "body": "<section><h2>Another player must touch first</h2><p>IFAB Law 14 says the penalty taker must not play the ball again until it has touched another player. A goalpost or crossbar is not a player. A goalkeeper is.</p><p>For a hypothetical ordinary in-match penalty that hits the post and returns directly to the kicker, an immediate second kick breaks this requirement. If the goalkeeper touches the ball first, that particular restriction is satisfied, although other rules can still affect the play.</p></section><section><h2>A rebound does not always end live play</h2><p>During normal match play, a saved penalty or one rebounding from the frame can leave a playable ball. The score has not changed just because the penalty was taken. A later valid finish is the scoring event.</p><p>Do not transfer this expectation to a penalty shootout. A shootout and a penalty within the match have different procedures; this guide focuses on the Law 14 in-match situation.</p></section><section><h2>An end-of-half extension is narrower</h2><p>When additional time is allowed only to take and complete a penalty, Law 14 defines when that kick ends. A touch by a player other than the defending goalkeeper, including the kicker, completes it. That is not an unlimited opportunity for a follow-up attack.</p><p>On a live score page, check whether the event is a penalty award, a saved attempt or a confirmed goal. Those labels describe separate stages. The hypothetical rebound examples here are explanations, not claims about a particular match.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-penalty-kick/", "IFAB: The penalty kick"]] }, { "slug": "football-penalty-feint-run-up", "category": "Football", "title": "Penalty feints: the run-up and completed run-up differ", "description": "Understand which deception IFAB allows and which brings a caution.", "body": "<section><h2>A pause is not one universal offence</h2><p>IFAB Law 14 permits feinting during the run-up. It separately prohibits feinting to kick once the run-up has been completed. The point in the sequence matters; a slow or unusual approach is not enough by itself to establish the offence.</p><p>For a hypothetical taker changing pace while approaching, first identify whether the feint occurred during the run-up or after it ended. A short highlight can omit the detail needed to decide.</p></section><section><h2>The prohibited feint has consequences</h2><p>For the prohibited completed-run-up feint, the retrieved Law prescribes an indirect free kick and a caution to the kicker, regardless of whether the ball enters the goal. A ball in the net is therefore not conclusive proof of a valid penalty goal.</p><p>The kick must also go forward. A backheel is permitted if the ball moves forward, so the movement of the ball matters more than the name of the technique.</p></section><section><h2>Separate technique from the final ruling</h2><p>The penalty taker must be identified, and the referee signals for the kick after the players take the required positions. An unusual routine does not remove those steps.</p><p>Use the confirmed decision on ScoreZaap rather than adding a goal from an apparent finish during a review. This guide covers run-up feinting, not every encroachment, goalkeeper offence or accidental double-contact case. Each needs its own facts and governing provision.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-penalty-kick/", "IFAB: The penalty kick"]] }, { "slug": "football-ball-hits-referee-live-or-dead", "category": "Football", "title": "Ball hits the referee: when does play stop?", "description": "Not every deflection from an official requires a dropped ball.", "body": "<section><h2>Contact alone does not stop play</h2><p>IFAB Law 9 says the ball normally remains in play when it touches a match official. The exception requires the ball to remain on the field and one of three effects: a promising attack starts, it goes directly into goal, or the team in possession changes.</p><p>A hypothetical harmless deflection with the same team retaining possession and no promising attack is not automatically a dropped ball simply because the referee was touched.</p></section><section><h2>The effect changes the restart</h2><p>When one of those specified effects occurs, play restarts with a dropped ball. An official-contact deflection directly into goal is therefore not an ordinary goal to add to the scoreboard.</p><p>If the ball instead leaves the field after hitting the official, the remain-on-the-field condition is absent. IFAB's examples explain that the usual throw-in, goal-kick or corner restart applies based on the players' last touch and exit location.</p></section><section><h2>Other rebounds can remain live</h2><p>A rebound from a post, crossbar or corner flag that stays on the field remains in play under Law 9. Those contacts are different from the specified official-contact effects.</p><p>The ball is also out of play when it wholly crosses a boundary or the referee stops play. That whistle matters: an apparent finish after play has already stopped cannot simply be counted because the ball entered the net. Watch the reported restart alongside the score.</p></section>", "sources": [["https://www.theifab.com/laws/latest/the-ball-in-and-out-of-play/", "IFAB: The ball in and out of play"]] }, { "slug": "football-var-check-vs-review-final-decision", "category": "Football", "title": "VAR check vs review: who makes the final decision?", "description": "A video check does not itself change a goal or prove a referee mistake.", "body": "<section><h2>A check is not a new score</h2><p>The retrieved IFAB VAR protocol describes assistance for reviewable decisions and incidents. A check of an apparent goal is part of that process, not a separate goal to add or proof that the initial decision is wrong.</p><p>The referee must make an initial decision. Allowing play to continue can itself be that decision; the protocol does not permit simply giving no decision and asking VAR to supply one.</p></section><section><h2>The referee owns the ruling</h2><p>Only the referee can initiate a review. VAR and other match officials can recommend one. The referee makes the final decision either from VAR information or after an on-field review.</p><p>A referee going to the monitor is therefore not a guarantee that a goal will be cancelled. They still have to decide after examining the relevant evidence. The score should reflect the final reported ruling, not the act of walking to the screen.</p></section><section><h2>There is no fixed review deadline</h2><p>IFAB says there is no time limit for the review process because accuracy matters more than speed. A long check alone cannot prove an error or a predetermined outcome.</p><p>Competition use and reviewable categories must be checked against the current protocol. This guide explains the decision process without claiming every foul can be reviewed, promising a review length or interpreting unseen replay angles. On ScoreZaap, treat the pending event as pending until the confirmed decision arrives.</p></section>", "sources": [["https://www.theifab.com/laws/latest/video-assistant-referee-var-protocol/", "IFAB: VAR protocol"]] }, { "slug": "nhl-periods-game-clock", "category": "Hockey", "title": "NHL periods and the clock: three periods of actual play", "description": "Read period labels and distinguish playing time from elapsed wall-clock time.", "body": "<section><h2>Regulation has three periods</h2><p>NHL Rule 77.1 allows three 20-minute periods of actual play, with an intermission between periods. That is 60 minutes of regulation playing time, not a promise that the entire event ends one hour after the opening face-off.</p><p>A scoreboard showing second period with 12:00 remaining describes the current period's clock. It does not mean 12 minutes remain until a guaranteed final result. Another regulation period is still ahead.</p></section><section><h2>Breaks are separate from the playing clock</h2><p>Rule 77.2 ordinarily lists an 18-minute intermission, or another duration designated by the League. An intermission label is therefore different from active play and should not be treated as a running match clock.</p><p>A displayed clock can stay still during a stoppage without the score feed being broken. Check whether the game is in play, stopped or between periods before drawing that conclusion.</p></section><section><h2>Tied regulation can lead to more play</h2><p>Regular-season overtime and playoff overtime follow different procedures under Rule 84. A tied score at the end of the third does not establish a final draw in those NHL formats.</p><p>Read ScoreZaap's period, clock and match status together. The examples here explain labels; they are not reported events or a measured promise about how quickly a provider refreshes the clock.</p></section>", "sources": [["https://media.nhl.com/site/asset/public/ext/2026-27/2026-27Rules.pdf", "NHL Official Rules 2026-2027"]] }, { "slug": "nhl-regular-season-overtime-playoffs", "category": "Hockey", "title": "NHL overtime: regular season vs playoffs", "description": "Five-minute regular-season overtime and repeated playoff periods are not interchangeable.", "body": "<section><h2>Regular-season overtime is sudden death</h2><p>NHL Rule 84.1 provides overtime of no more than five minutes after tied regulation, normally with three skaters and a goalkeeper per team. The first scoring team wins and gets an additional standings point. Both sides already receive one point for reaching that tied-regulation stage.</p><p>A hypothetical 5-5 game can end 6-5 from an overtime goal. That is a goal in live overtime play, not a shootout conversion. Penalty situations can alter player strength, so three skaters is not an unconditional count for every moment.</p></section><section><h2>A shootout follows a still-tied regular-season overtime</h2><p>Rule 84.4 sends a regular-season game to a shootout if it remains tied after the five-minute overtime. It is a separate deciding procedure, not another ordinary period of open play.</p><p>The displayed final score and the shootout tally answer different questions. Check the finish label before interpreting an extra goal in the team total as a normal scored goal by an individual.</p></section><section><h2>Playoffs use a different format</h2><p>Under Rule 84.5, tied Stanley Cup Playoff games continue with 20-minute overtime periods until a team scores. The retrieved rule does not use the regular-season five-minute-then-shootout route for that playoff format.</p><p>ScoreZaap's OT label needs competition context. This guide is about the NHL 2026-27 rulebook, not a claim that every hockey league uses identical timing or player-strength rules.</p></section>", "sources": [["https://media.nhl.com/site/asset/public/ext/2026-27/2026-27Rules.pdf", "NHL Official Rules 2026-2027"]] }, { "slug": "nhl-minor-penalty-power-play-goal", "category": "Hockey", "title": "NHL minor penalties: when does a power-play goal end one?", "description": "Short-handed status and the penalty type matter before a player returns.", "body": "<section><h2>A minor normally costs two minutes</h2><p>NHL Rule 16.1 sends a player other than the goalkeeper off for two minutes, with no substitute during that penalty. This can put their team below the opponent's numerical strength.</p><p>A penalty label does not always tell you the strength on the ice by itself. Coincidental penalties can leave neither team short-handed relative to the other.</p></section><section><h2>The goal must meet the release conditions</h2><p>Under Rule 16.2, an opponent's goal can end a minor or bench minor when the scored-against team is short-handed because of that penalty. The qualifying penalty with the least time left terminates, subject to the coincidental-penalty provisions.</p><p>A hypothetical opponent scoring during a single qualifying minor can restore equal strength before the two minutes expire. Do not assume every goal ends every type of penalty, or clears several penalties at once.</p></section><section><h2>A penalty-shot goal is different</h2><p>Rule 16.2 explicitly says a goal on a penalty shot does not release the penalised player under this automatic-termination rule. A penalty-shot finish and an ordinary power-play goal are separate situations.</p><p>On ScoreZaap, read the confirmed goal, penalty clock and player-strength context together. The team score alone is not enough to decide who returns from the penalty bench. This guide describes the retrieved NHLrule, not a ruling on an unseen incident.</p></section>", "sources": [["https://media.nhl.com/site/asset/public/ext/2026-27/2026-27Rules.pdf", "NHL Official Rules 2026-2027"]] }, { "slug": "nhl-shootout-final-score-player-goals", "category": "Hockey", "title": "NHL shootouts: why the final score adds only one goal", "description": "Shootout conversions are not all added to the team score or a player's goal total.", "body": "<section><h2>The deciding procedure follows tied overtime</h2><p>NHL Rule 84.4 uses a shootout after a tied five-minute regular-season overtime. Teams alternate attempts, starting with three each unless the result is decided earlier, then continue if necessary.</p><p>A shootout attempt is not an open-play overtime attack. The finish label is important when reading a result that otherwise looks like an ordinary one-goal win.</p></section><section><h2>Only one goal is added to the winning team score</h2><p>Regardless of the number of shootout conversions, Rule 84.4 records the winning team with one more goal than its opponent based on the tied score at the end of overtime.</p><p>Imagine regulation and overtime end 2-2 and one team wins the shootout 3-1. The game result becomes 3-2, not 5-3. The 3-1 shootout tally is a separate measure of successful attempts.</p></section><section><h2>Personal statistics do not mirror that extra team goal</h2><p>The rule says the player scoring the shootout winner is not credited with an extra personal goal. The losing goalkeeper is not charged with that additional goal against either.</p><p>A player-goals column staying unchanged despite a shootout win is therefore not automatically a data error. Use ScoreZaap's result status and any available deciding-method context, rather than adding shootout conversions to ordinary scoring statistics yourself.</p></section>", "sources": [["https://media.nhl.com/site/asset/public/ext/2026-27/2026-27Rules.pdf", "NHL Official Rules 2026-2027"]] }, { "slug": "asian-games-compound-archery-scoring", "category": "Asian Games", "title": "Asian Games archery: compound scores and shoot-offs", "description": "Read team totals, mixed-team scores and tied finals without confusing arrow points with set points.", "body": "<section><h2>Start with the discipline and event</h2><p>At the Asian Games, a compound team result such as 238-234 is an accumulated arrow score. It is not the same kind of score as a recurve match decided on set points. The event name matters before the numbers make sense.</p><p>World Archery explains that compound individual matches use 15 arrows, team matches use 24, and mixed teams use 16. Each arrow can score up to ten, so the normal maximum is 240 for a three-person team and 160 for a mixed team.</p></section><section><h2>Why 238 can decide a gold medal</h2><p>India's women beat China 238-234 in the September 30 Asian Games compound team final. That is a four-point difference over the match, not four sets. The men's team won a separate final 238-237.</p><p>Using a hypothetical example, a team ending on 237 from 24 arrows is three points below the possible 240. That arithmetic says nothing about the sequence of arrows or whether a particular athlete missed the ten ring.</p></section><section><h2>Keep the shoot-off separate</h2><p>India and South Korea tied 157-157 in the compound mixed team final. The official report records the deciding shoot-off as 20-19. The regulation score and shoot-off score describe separate stages; adding them into 177-176 would hide the tie-breaking method.</p><p>World Archery explains recurve using a set system: the individual winner reaches six set points, while teams reach five. Do not apply those thresholds to the cumulative compound totals. Check the bowstyle and event label every time.</p></section>", "sources": [["https://www.worldarchery.sport/news/202393/how-it-works-beginners-guide-2026-hyundai-archery-world-cup", "World Archery: scoring formats"], ["https://www.olympics.com/en/news/asian-games-2026-archery-compound-india-gold-la-2028-olympics-quota", "Olympics.com: Asian Games archery finals"]] }, { "slug": "asian-games-relay-time-team-medal", "category": "Asian Games", "title": "Asian Games athletics: read a 4x400m relay result", "description": "Four legs, one team time and one event medal. Understand the relay clock without treating it as an individual 400m result.", "body": "<section><h2>Four runners share one race</h2><p>A 4x400m relay has four athletes running 400 metres each while passing a baton. The team covers 1600 metres in total. Its published finishing time is the combined race time, not the fastest runner's individual 400m time.</p><p>Olympics.com's relay explainer describes the last runner as the anchor. A result showing the team's athlete names tells you who took part; it does not automatically provide each runner's split time.</p></section><section><h2>Read minutes, seconds and hundredths</h2><p>India won the women's Asian Games final on September 29 in 3:29.69. Read that as three minutes, 29.69 seconds. Bahrain finished in 3:30.21, so the winning margin was 0.52 seconds.</p><p>The 3:29.69 belongs to Kiran Pahal, Poovamma Machettira, Prachi Choudhary and Vithya Ramraj as a relay team. Dividing by four can give an arithmetic average, but it does not reveal their measured individual splits or account for rolling starts.</p></section><section><h2>Do not mix different relay events</h2><p>India's men won bronze in a separate 4x400m final in 3:01.61. Women's, men's and mixed-team events have separate results and medals. One relay gold adds one gold to the country's event tally, rather than four because four athletes ran.</p><p>Use the official final result and any penalties, not merely a live clock, to identify the medal order. This guide does not infer a national record, personal best or selection from the finishing time.</p></section>", "sources": [["https://www.olympics.com/en/news/athletics-relay-races-rules-history-world-records-olympics", "Olympics.com: relay basics"], ["https://www.olympics.com/en/news/asian-games-2026-athletics-india-women-4x400m-relay-gold-results", "Olympics.com: Asian Games relay results"]] }, { "slug": "asian-games-sport-dates-fixture-times", "category": "Asian Games", "title": "Asian Games schedule: sport dates are not fixture times", "description": "Use the official sport windows, then check a specific session or match before planning to watch.", "body": `<section><h2>A sport window contains many sessions</h2><p>The official Asian Games 2026 overview lists cricket from September 17 to October 3 and football from September 14 to October 3. Those windows describe when a sport is on the programme. They do not promise an India match on every date or tell you the time of a final.</p><p>A sport can also have several disciplines. Basketball and 3x3 basketball have different date ranges; tennis and soft tennis are separate rows; cycling is split into road, track, BMX and mountain-bike events.</p></section><section><h2>Read the calendar in Japan</h2><p>ScoreZaap's sport schedule uses Japan local calendar dates from the official overview. For an individual start time, check whether the source gives Japan time, India time or another timezone before converting. An early-morning Japan session can fall on the previous calendar date somewhere else.</p><p>The linked overview states that its information was correct as of August 28, 2026 and could change. A date window is useful for finding the sport, but it is not a substitute for a current day's order of play or start list.</p></section><section><h2>Follow the right section</h2><p>Use <a href="/asian-games/schedule">Sports &amp; schedule</a> for the programme, <a href="/asian-games/medals">Medals &amp; results</a> for checked event finishes, and <a href="/asian-games">Asian Games news</a> for original reports. The medal-results page labels its coverage as selected events, not a complete live country tally.</p><p>Team-event medals count by event. A three-person archery team winning one final contributes one country gold, not three. The athletes' personal medal counts answer a different question.</p></section>`, "sources": [["https://www.olympics.com/en/news/asian-games-2026-sports-schedule-la28-watch-live", "Olympics.com: sport-by-sport programme"], ["https://www.aichi-nagoya2026.org/sports/", "AINAGOC: sports programme"]] }];
+var SZ_BLOG_CSS = `:root{color-scheme:dark;--bg:#070b12;--card:#101927;--line:#223047;--txt:#e8eef8;--dim:#a7b3c6;--lime:#a3e635;--blue:#38bdf8}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% 0%,#163128 0,transparent 40%),var(--bg);color:var(--txt);font-family:Inter,system-ui,sans-serif;line-height:1.7}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid var(--lime);outline-offset:5px}.blogwrap{max-width:1120px;margin:auto;padding:24px}.blognav{display:flex;align-items:center;gap:22px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:20px}.blognav .brand{font-size:26px;font-weight:800;letter-spacing:-1px;color:var(--txt);margin-right:auto}.brand span{color:var(--lime)}.blognav a{color:var(--txt);font-size:14px}.blognav a[aria-current]{color:var(--lime)}.eyebrow{color:var(--lime);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:2px}.hero{padding:54px 0 30px;max-width:820px}.hero h1{font-size:clamp(34px,5vw,62px);line-height:1.1;letter-spacing:-2px;margin:14px 0 20px}.hero p{color:var(--dim);font-size:18px;max-width:660px}.filterbar{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 28px;align-items:center}.filterbar button{cursor:pointer;color:var(--txt);background:var(--card);border:1px solid var(--line);border-radius:20px;padding:9px 16px;font:inherit;font-size:13px}.filterbar button.active{background:var(--lime);color:#142006;border-color:var(--lime)}.filterbar input{flex:1;min-width:180px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit;font-size:14px}.bloggrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.postcard{display:flex;flex-direction:column;padding:24px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(155deg,#162335,#0d1521);transition:border-color .2s}.postcard:hover{border-color:var(--lime)}.postcard h2{font-size:21px;line-height:1.3;margin:15px 0 12px}.postcard h2 a{color:var(--txt)}.postcard p{color:var(--dim);font-size:14px;flex:1}.postcard .meta{font-size:12px;color:var(--dim);margin:16px 0}.readlink{font-size:14px;color:var(--lime);font-weight:700}.article{max-width:760px;margin:38px auto}.crumbs{font-size:13px;color:var(--dim)}.article h1{font-size:clamp(32px,5vw,50px);letter-spacing:-1.4px;line-height:1.15;margin:18px 0}.article .dek{font-size:19px;color:var(--dim)}.article .meta{font-size:13px;color:var(--dim);padding:18px 0;border-bottom:1px solid var(--line)}.article h2{font-size:24px;line-height:1.3;margin-top:36px}.article p{font-size:17px}.article aside,.practical{padding:22px;border:1px solid var(--line);background:var(--card);border-radius:16px;margin:28px 0}.article aside h2,.practical h2{margin-top:0}.article li{margin:7px 0}.article a{overflow-wrap:anywhere}.related{margin:50px 0}.related h2{font-size:26px}.editorial{padding:24px;margin:32px 0;border:1px solid var(--line);border-radius:16px;color:var(--dim)}[hidden]{display:none!important}.empty{padding:24px;color:var(--dim)}@media(max-width:850px){.bloggrid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.blogwrap{padding:18px}.bloggrid{grid-template-columns:1fr}.blognav{gap:14px}.blognav .brand{width:100%}.hero{padding-top:34px}.hero h1{letter-spacing:-1px}.article p{font-size:16px}}`;
+function szBlogEsc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+__name(szBlogEsc, "szBlogEsc");
+__name2(szBlogEsc, "szBlogEsc");
+function szBlogLd(o) {
+  return '<script type="application/ld+json">' + JSON.stringify(o).replace(/</g, "\\u003c") + "<\/script>";
+}
+__name(szBlogLd, "szBlogLd");
+__name2(szBlogLd, "szBlogLd");
+function szBlogCard(p) {
+  return '<article class="postcard" data-category="' + szBlogEsc(p.category) + '" data-search="' + szBlogEsc((p.title + " " + p.description).toLowerCase()) + '"><span class="eyebrow">' + szBlogEsc(p.category) + '</span><h2><a href="/blog/' + p.slug + '">' + szBlogEsc(p.title) + "</a></h2><p>" + szBlogEsc(p.description) + '</p><div class="meta">' + Math.max(2, Math.ceil(p.body.replace(/<[^>]*>/g, " ").split(/\s+/).length / 200)) + ' min read \xB7 September 30, 2026</div><a class="readlink" href="/blog/' + p.slug + '">Read guide &#8594;</a></article>';
+}
+__name(szBlogCard, "szBlogCard");
+__name2(szBlogCard, "szBlogCard");
+function szBlogPage(slug) {
+  const p = SZ_BLOG_POSTS.find((p2) => p2.slug === slug);
+  if (slug && !p) return null;
+  const title = p ? p.title + " - ScoreZaap" : "Sports Rules & Live Score Guides - ScoreZaap";
+  const desc = p ? p.description : "Original sports rules and live score guides: cricket scorecards, run rates, football cards, offside, tennis scoring, NBA clocks, baseball and F1.";
+  const url = "https://scorezaap.tech/blog" + (p ? "/" + p.slug : "");
+  const nav = '<nav class="blognav" aria-label="Main navigation"><a class="brand" href="/">&#9889; Score<span>Zaap</span></a><a href="/">Live scores</a><a href="/schedule">Schedule</a><a href="/rankings">Rankings</a><a href="/blog" aria-current="page">Blog</a><a href="/news">News</a></nav>';
+  let content;
+  if (p) {
+    const related = SZ_BLOG_POSTS.filter((x) => x.slug !== p.slug && x.category === p.category).slice(0, 3);
+    if (related.length < 3) related.push(...SZ_BLOG_POSTS.filter((x) => x.slug !== p.slug && !related.includes(x)).slice(0, 3 - related.length));
+    content = '<article class="article"><div class="crumbs"><a href="/">Home</a> / <a href="/blog">Blog</a> / ' + szBlogEsc(p.category) + "</div><h1>" + szBlogEsc(p.title) + '</h1><p class="dek">' + szBlogEsc(desc) + '</p><div class="meta">By ScoreZaap \xB7 <time datetime="2026-09-30">September 30, 2026</time> \xB7 ' + Math.max(2, Math.ceil(p.body.replace(/<[^>]*>/g, " ").split(/\s+/).length / 200)) + " min read</div>" + p.body + "<aside><h2>Rule references</h2><p>The explanation is original. Rule details were checked against these primary sources; event-specific playing conditions can differ.</p><ul>" + p.sources.map(([u, n]) => '<li><a href="' + szBlogEsc(u) + '" rel="noopener">' + szBlogEsc(n) + "</a></li>").join("") + '</ul></aside><p><a href="/?tab=' + ({ Cricket: "cricket", Football: "football", Tennis: "tennis" }[p.category] || "all") + '">Follow live scores on ScoreZaap &#8594;</a></p></article><section class="related"><h2>Keep reading</h2><div class="bloggrid">' + related.map(szBlogCard).join("") + "</div></section>";
+  } else {
+    content = '<section class="hero"><div class="eyebrow">THE SCOREZAAP BLOG</div><h1>Know the game.<br>Read every score.</h1><p>Original guides to the numbers, rules and moments behind cricket, football, tennis, basketball, baseball and Formula 1. Start with a question. Leave with a clearer view of the match.</p><p style="font-size:14px">' + SZ_BLOG_POSTS.length + ' original guides \xB7 Examples explained, not invented match reports</p></section><div class="filterbar" role="group" aria-label="Filter guides">' + ["All", "Cricket", "Football", "Tennis", "Basketball", "Baseball", "Hockey", "Formula 1", "Asian Games", "Sports guides"].map((x, i) => '<button type="button" data-filter="' + x + '" class="' + (i ? "" : "active") + '" aria-pressed="' + !i + '">' + x + "</button>").join("") + '<input id="blogsearch" type="search" aria-label="Search guides" placeholder="Search guides..."></div><section aria-label="Sports guides" class="bloggrid">' + SZ_BLOG_POSTS.map(szBlogCard).join("") + '</section><p id="blogempty" class="empty" hidden>No guides match that search. Try another word or choose All.</p><section class="editorial"><h2>How we write</h2><p>These are original, evergreen explainers with worked examples and links to primary rulebooks. They are not copied news, betting tips or reports of matches we did not watch. We label teaching examples and distinguish general rules from event-specific conditions.</p><p>Found a mistake? <a href="/contact">Contact ScoreZaap</a>. For live match information, use <a href="/">Live scores</a>, <a href="/schedule">Schedule</a> and <a href="/archives">Archives</a>.</p></section><script>(function(){var f="All",q="";function run(){var count=0;document.querySelectorAll(".postcard").forEach(function(c){var ok=(f==="All"||c.dataset.category===f)&&c.dataset.search.includes(q);c.hidden=!ok;if(ok)count++});document.getElementById("blogempty").hidden=!!count}document.querySelectorAll("[data-filter]").forEach(function(b){b.onclick=function(){f=b.dataset.filter;document.querySelectorAll("[data-filter]").forEach(function(x){x.classList.toggle("active",x===b);x.setAttribute("aria-pressed",x===b)});run()}});document.getElementById("blogsearch").oninput=function(e){q=e.target.value.trim().toLowerCase();run()}})();<\/script>';
+  }
+  const schema = p ? { "@context": "https://schema.org", "@type": "BlogPosting", headline: p.title, description: desc, datePublished: "2026-09-30", dateModified: "2026-09-30", author: { "@type": "Organization", name: "ScoreZaap", url: "https://scorezaap.tech/about" }, publisher: { "@type": "Organization", name: "ScoreZaap", url: "https://scorezaap.tech/" }, mainEntityOfPage: url, url, articleSection: p.category, inLanguage: "en" } : { "@context": "https://schema.org", "@type": "CollectionPage", name: "ScoreZaap Blog", url, description: desc, mainEntity: { "@type": "ItemList", itemListElement: SZ_BLOG_POSTS.map((p2, i) => ({ "@type": "ListItem", position: i + 1, name: p2.title, url: "https://scorezaap.tech/blog/" + p2.slug })) } };
+  const crumbs = { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Home", item: "https://scorezaap.tech/" }, { "@type": "ListItem", position: 2, name: "Blog", item: "https://scorezaap.tech/blog" }, ...p ? [{ "@type": "ListItem", position: 3, name: p.title, item: url }] : []] };
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + szBlogEsc(title) + '</title><meta name="description" content="' + szBlogEsc(desc) + '"><meta name="keywords" content="' + szBlogEsc(p ? p.title + ", " + p.category + ", sports rules guide" : "sports guides, Asian Games sports, cricket rules, football rules") + '"><link rel="canonical" href="' + url + '"><meta property="og:type" content="' + (p ? "article" : "website") + '"><meta property="og:site_name" content="ScoreZaap"><meta property="og:title" content="' + szBlogEsc(title) + '"><meta property="og:description" content="' + szBlogEsc(desc) + '"><meta property="og:url" content="' + url + '"><meta property="og:image" content="https://scorezaap.tech/icon-512.png"><meta name="twitter:card" content="summary"><meta name="theme-color" content="#070b12"><link rel="icon" href="/icon-192.png"><style>' + SZ_BLOG_CSS + "</style>" + szBlogLd(schema) + szBlogLd(crumbs) + '</head><body><main class="blogwrap">' + nav + content + "</main></body></html>";
+}
+__name(szBlogPage, "szBlogPage");
+__name2(szBlogPage, "szBlogPage");
+var SZ_DAILY_RESULT_SOURCES = [
+  { sport: 'cricket', label: 'Cricket', key: 'cricket' },
+  { sport: 'football', label: 'Football', key: 'football' },
+  { sport: 'nba', label: 'NBA basketball', key: 'espn_nba' },
+  { sport: 'mlb', label: 'MLB baseball', key: 'espn_mlb' },
+  { sport: 'nhl', label: 'NHL hockey', key: 'espn_nhl' },
+  { sport: 'tennis', label: 'Tennis', key: 'espn_tennis' },
+  { sport: 'f1', label: 'Formula 1', key: 'espn_f1' }
+];
+async function szDailyEnsureSchema(env) {
+  if (!env.DB) throw new Error('D1 unavailable for daily archive');
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sz_daily_posts (slug TEXT PRIMARY KEY, published_date TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL, results_json TEXT NOT NULL, published_at TEXT NOT NULL, source_updated_at TEXT NOT NULL)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS sz_daily_posts_date_idx ON sz_daily_posts(published_date DESC)`).run();
+}
+__name(szDailyEnsureSchema, 'szDailyEnsureSchema');
+function szDailyDate(ms) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+__name(szDailyDate, 'szDailyDate');
+function szDailyDateLabel(day) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', dateStyle: 'long' }).format(new Date(day + 'T12:00:00+05:30'));
+}
+__name(szDailyDateLabel, 'szDailyDateLabel');
+function szDailyTimeLabel(iso) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }).format(d);
+}
+__name(szDailyTimeLabel, 'szDailyTimeLabel');
+async function szDailyGetPost(env, slug) {
+  if (!env.DB || !/^sports-results-\d{4}-\d{2}-\d{2}$/.test(String(slug))) return null;
+  try {
+    const row = await env.DB.prepare(`SELECT slug,published_date,title,description,results_json,published_at,source_updated_at FROM sz_daily_posts WHERE slug=? LIMIT 1`).bind(slug).first();
+    return row || null;
+  } catch (e) { return null; }
+}
+__name(szDailyGetPost, 'szDailyGetPost');
+async function szDailyListPosts(env, limit = 20, offset = 0) {
+  if (!env.DB) return [];
+  try {
+    const n = Math.max(1, Math.min(50, Math.trunc(Number(limit) || 20)));
+    const o = Math.max(0, Math.trunc(Number(offset) || 0));
+    const r = await env.DB.prepare(`SELECT slug,published_date,title,description,published_at FROM sz_daily_posts ORDER BY published_date DESC LIMIT ? OFFSET ?`).bind(n, o).all();
+    return Array.isArray(r?.results) ? r.results : [];
+  } catch (e) { return []; }
+}
+__name(szDailyListPosts, 'szDailyListPosts');
+async function szDailyPostCount(env) {
+  if (!env.DB) return 0;
+  try {
+    const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM sz_daily_posts`).first();
+    return Math.max(0, Number(r?.n) || 0);
+  } catch (e) { return 0; }
+}
+__name(szDailyPostCount, 'szDailyPostCount');
+async function szDailySitemapPosts(env) {
+  if (!env.DB) return [];
+  try {
+    const r = await env.DB.prepare(`SELECT slug FROM sz_daily_posts ORDER BY published_date DESC LIMIT 5000`).all();
+    return Array.isArray(r?.results) ? r.results.filter((x) => /^sports-results-\d{4}-\d{2}-\d{2}$/.test(String(x.slug || ''))) : [];
+  } catch (e) { return []; }
+}
+__name(szDailySitemapPosts, 'szDailySitemapPosts');
+function szDailySlug(day) { return 'sports-results-' + day; }
+__name(szDailySlug, 'szDailySlug');
+async function szDailyPublish(env, nowMs = Date.now()) {
+  await szDailyEnsureSchema(env);
+  const day = szDailyDate(nowMs);
+  const slug = szDailySlug(day);
+  const prior = await szDailyGetPost(env, slug);
+  if (prior) return { ...prior, created: false };
+  if (!env.SPORTS_KV) throw new Error('Score snapshots unavailable');
+  const sources = [];
+  const sourceMatches = [];
+  const stale = [];
+  for (const spec of SZ_DAILY_RESULT_SOURCES) {
+    const blob = await readKV(env, spec.key, { at: 0, matches: [] }).catch(() => null);
+    const at = Number(blob?.at || 0);
+    const age = nowMs - at;
+    if (!Number.isFinite(at) || at <= 0 || age < -5 * 6e4 || age > 2 * 36e5 || !Array.isArray(blob?.matches)) {
+      stale.push(spec.label);
+      continue;
+    }
+    sources.push({ sport: spec.sport, label: spec.label, snapshot_at: new Date(at).toISOString() });
+    for (const m of blob.matches) sourceMatches.push({ spec, match: m, snapshotAt: at });
+  }
+  if (sources.length < 3) throw new Error('Fewer than three fresh score feeds; daily roundup deferred');
+  const priorPosts = await env.DB.prepare(`SELECT results_json FROM sz_daily_posts ORDER BY published_date DESC LIMIT 7`).all().catch(() => ({ results: [] }));
+  const seen = new Set();
+  for (const p of Array.isArray(priorPosts?.results) ? priorPosts.results : []) {
+    try { for (const x of JSON.parse(p.results_json || '{}').results || []) if (x.id) seen.add(String(x.id)); } catch (e) {}
+  }
+  const earliest = nowMs - 72 * 36e5;
+  const results = [];
+  const localSeen = new Set();
+  for (const { spec, match: m, snapshotAt } of sourceMatches) {
+    const id = String(m?.id || '');
+    const startAt = Date.parse(m?.start || '');
+    if (!id || seen.has(id) || localSeen.has(id) || String(m?.status || '').toLowerCase() !== 'finished' || !Number.isFinite(startAt) || startAt < earliest || startAt > nowMs + 5 * 6e4) continue;
+    const scores = Array.isArray(m.scores) ? m.scores.map((s) => [s?.inning ? String(s.inning).slice(0, 40) + ': ' : '', String(s?.value || '').slice(0, 100)].join('')).filter((s) => s.replace(/^[^:]+:\s*/, '').trim()) : [];
+    if (!scores.length && m.homeScore != null && m.awayScore != null) scores.push(String(m.homeScore).slice(0, 32) + ' - ' + String(m.awayScore).slice(0, 32));
+    if (!scores.length) continue;
+    localSeen.add(id);
+    results.push({ id: id.slice(0, 140), sport: spec.sport, sport_label: spec.label, title: String(m.title || '').slice(0, 240), competition: String(m.series || m.matchType || '').slice(0, 140), status_text: String(m.statusText || 'Finished').slice(0, 180), start: new Date(startAt).toISOString(), scores: scores.slice(0, 4), snapshot_at: new Date(snapshotAt).toISOString() });
+  }
+  results.sort((a, b) => Date.parse(b.start) - Date.parse(a.start) || a.sport.localeCompare(b.sport));
+  const labels = sources.map((x) => x.label);
+  const dateLabel = szDailyDateLabel(day);
+  const title = 'Sports Results Roundup: ' + dateLabel + ' | ScoreZaap';
+  const sports = [...new Set(results.map((x) => x.sport_label))];
+  const description = results.length ? ('Final scores from ' + results.length + ' recent matches across ' + (sports.length ? sports.join(', ') : labels.join(', ')) + ', taken from fresh ScoreZaap score snapshots.').slice(0, 158) : ('A fresh multi-sport ScoreZaap snapshot for ' + dateLabel + ' found no new completed results to add.').slice(0, 158);
+  const publishedAt = new Date(nowMs).toISOString();
+  const sourceUpdatedAt = new Date(Math.max(...sources.map((x) => Date.parse(x.snapshot_at)))).toISOString();
+  const payload = { results, sources, excluded_stale_feeds: stale };
+  await env.DB.prepare(`INSERT OR IGNORE INTO sz_daily_posts (slug,published_date,title,description,results_json,published_at,source_updated_at) VALUES (?,?,?,?,?,?,?)`).bind(slug, day, title, description, JSON.stringify(payload), publishedAt, sourceUpdatedAt).run();
+  const row = await szDailyGetPost(env, slug);
+  if (!row) throw new Error('Daily result post was not persisted');
+  return { ...row, created: row.published_at === publishedAt };
+}
+__name(szDailyPublish, 'szDailyPublish');
+function szDailyPostPage(post) {
+  let data;
+  try { data = JSON.parse(post.results_json || '{}'); } catch (e) { return null; }
+  const results = Array.isArray(data.results) ? data.results : [];
+  const sources = Array.isArray(data.sources) ? data.sources : [];
+  const day = String(post.published_date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^sports-results-\d{4}-\d{2}-\d{2}$/.test(String(post.slug || ''))) return null;
+  const published = Date.parse(post.published_at || day);
+  if (!Number.isFinite(published)) return null;
+  const title = String(post.title || '').slice(0, 150);
+  const description = String(post.description || '').slice(0, 158);
+  const url = 'https://scorezaap.tech/blog/' + post.slug;
+  const groups = new Map();
+  for (const item of results) {
+    if (!item || !SZ_DAILY_RESULT_SOURCES.some((x) => x.sport === item.sport) || !item.id || !item.title) continue;
+    const label = String(item.sport_label || item.sport).slice(0, 40);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(item);
+  }
+  let body = '<section><h2>How this roundup was made</h2><p>This edition lists newly observed matches marked finished in fresh ScoreZaap score snapshots, with event starts limited to the previous 72 hours. Results already published in recent roundups are not repeated. It repeats recorded scores and status; it does not add match commentary or infer facts beyond those records. The feed is a snapshot and providers may correct scores.</p><p>Fresh feed snapshots included: ' + (sources.length ? sources.map((x) => szBlogEsc(x.label) + ' (' + szBlogEsc(szDailyTimeLabel(x.snapshot_at)) + ')').join('; ') : 'none') + '.</p></section>';
+  if (!groups.size) {
+    body += '<section><h2>No new final scores in this snapshot</h2><p>No new completed results were available to add from the fresh ScoreZaap score feeds at publication time. Earlier results are kept in their own dated posts rather than repeated here.</p></section>';
+  } else {
+    for (const [label, items] of groups) {
+      body += '<section><h2>' + szBlogEsc(label) + ' results</h2><ul>' + items.map((x) => {
+        const matchUrl = '/match/' + encodeURIComponent(x.sport) + '/' + encodeURIComponent(x.id);
+        const score = x.scores.map((s) => szBlogEsc(s)).join(' · ');
+        const detail = [x.competition, x.status_text].filter(Boolean).map((s) => szBlogEsc(s)).join(' · ');
+        return '<li><a href="' + szBlogEsc(matchUrl) + '">' + szBlogEsc(x.title) + '</a><p><strong>' + score + '</strong>' + (detail ? ' <span>· ' + detail + '</span>' : '') + '</p><time datetime="' + szBlogEsc(x.start) + '">' + szBlogEsc(szDailyTimeLabel(x.start)) + ' IST</time></li>';
+      }).join('') + '</ul></section>';
+    }
+  }
+  if (Array.isArray(data.excluded_stale_feeds) && data.excluded_stale_feeds.length) body += '<section><h2>Feed coverage</h2><p>These feeds did not have a sufficiently recent snapshot and were left out: ' + data.excluded_stale_feeds.map(szBlogEsc).join(', ') + '.</p></section>';
+  body += '<p><a href="/">See the live ScoreZaap scoreboards</a></p>';
+  const dateLabel = szDailyDateLabel(day);
+  const schema = { ['@context']: 'https://schema.org', ['@type']: 'BlogPosting', headline: title, description, datePublished: new Date(published).toISOString(), dateModified: new Date(published).toISOString(), author: { ['@type']: 'Organization', name: 'ScoreZaap', url: 'https://scorezaap.tech/about' }, publisher: { ['@type']: 'Organization', name: 'ScoreZaap', url: 'https://scorezaap.tech/' }, mainEntityOfPage: url, url, articleSection: 'Sports Results', inLanguage: 'en', keywords: 'daily sports results, ' + [...new Set(sources.map((x) => String(x.label).toLowerCase()))].join(', ') };
+  const crumbs = { ['@context']: 'https://schema.org', ['@type']: 'BreadcrumbList', itemListElement: [{ ['@type']: 'ListItem', position: 1, name: 'Home', item: 'https://scorezaap.tech/' }, { ['@type']: 'ListItem', position: 2, name: 'Blog', item: 'https://scorezaap.tech/blog' }, { ['@type']: 'ListItem', position: 3, name: title, item: url }] };
+  const nav = '<nav class="blognav" aria-label="Main navigation"><a class="brand" href="/">&#9889; Score<span>Zaap</span></a><a href="/">Live scores</a><a href="/schedule">Schedule</a><a href="/rankings">Rankings</a><a href="/blog" aria-current="page">Blog</a><a href="/news">News</a></nav>';
+  const estimate = Math.max(2, Math.ceil(body.replace(/<[^>]*>/g, ' ').split(/\s+/).length / 200));
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + szBlogEsc(title) + '</title><meta name="description" content="' + szBlogEsc(description) + '"><meta name="keywords" content="' + szBlogEsc(schema.keywords) + '"><link rel="canonical" href="' + url + '"><meta property="og:type" content="article"><meta property="og:site_name" content="ScoreZaap"><meta property="og:title" content="' + szBlogEsc(title) + '"><meta property="og:description" content="' + szBlogEsc(description) + '"><meta property="og:url" content="' + url + '"><meta property="og:image" content="https://scorezaap.tech/icon-512.png"><meta name="twitter:card" content="summary"><meta name="theme-color" content="#070b12"><link rel="icon" href="/icon-192.png"><style>' + SZ_BLOG_CSS + '</style>' + szBlogLd(schema) + szBlogLd(crumbs) + '</head><body><main class="blogwrap">' + nav + '<article class="article"><div class="crumbs"><a href="/">Home</a> / <a href="/blog">Blog</a> / Sports Results</div><h1>' + szBlogEsc(title) + '</h1><p class="dek">' + szBlogEsc(description) + '</p><div class="meta">By ScoreZaap · <time datetime="' + day + '">' + szBlogEsc(dateLabel) + '</time> · ' + estimate + ' min read</div>' + body + '</article><section class="related"><h2>Daily results archive</h2><p><a href="/blog">Browse all daily results and sports guides</a></p></section></main></body></html>';
+}
+__name(szDailyPostPage, 'szDailyPostPage');
+function szDailyArchiveHtml(posts, page, total, pageSize) {
+  if (!posts.length && !total) return '';
+  const cards = posts.map((p) => '<article class="daily-archive-card"><span class="eyebrow">DAILY SPORTS RESULTS</span><h2><a href="/blog/' + szBlogEsc(p.slug) + '">' + szBlogEsc(p.title) + '</a></h2><p>' + szBlogEsc(p.description) + '</p><div class="meta"><time datetime="' + szBlogEsc(p.published_date) + '">' + szBlogEsc(szDailyDateLabel(p.published_date)) + '</time></div></article>').join('');
+  const pages = Math.ceil(total / pageSize);
+  const nav = pages > 1 ? '<nav aria-label="Daily results archive pages">' + (page > 1 ? '<a href="/blog?daily_page=' + (page - 1) + '">Newer posts</a> ' : '') + 'Page ' + page + ' of ' + pages + (page < pages ? ' <a href="/blog?daily_page=' + (page + 1) + '">Older posts</a>' : '') + '</nav>' : '';
+  return '<style>.daily-archive-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}.daily-archive-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}.daily-archive-card h2{margin:6px 0;font-size:20px}.daily-archive-card p{color:var(--dim);margin:8px 0}.daily-archive-card .meta{color:var(--dim);font-size:13px}</style><section class="daily-results-archive"><div class="hero"><div class="eyebrow">DAILY ARCHIVE</div><h2>Sports results, one roundup per day</h2><p>Fresh, dated results from ScoreZaap score snapshots. Older roundups stay available here.</p></div><div class="daily-archive-grid">' + cards + '</div>' + nav + '</section>';
+}
+__name(szDailyArchiveHtml, 'szDailyArchiveHtml');
+
+var SZ_MATCH_POST_SOURCES = [
+  { sport: 'cricket', label: 'Cricket', key: 'cricket' },
+  { sport: 'football', label: 'Football', key: 'football' },
+  { sport: 'nba', label: 'NBA basketball', key: 'espn_nba' },
+  { sport: 'mlb', label: 'MLB baseball', key: 'espn_mlb' },
+  { sport: 'nhl', label: 'NHL hockey', key: 'espn_nhl' },
+  { sport: 'tennis', label: 'Tennis', key: 'espn_tennis' },
+  { sport: 'f1', label: 'Formula 1', key: 'espn_f1' }
+];
+async function szMatchEnsureSchema(env) {
+  if (!env.DB) throw new Error('D1 unavailable for match article archive');
+  await szAutoSchema(env);
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sz_match_posts (match_id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, sport TEXT NOT NULL, published_date TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, result_json TEXT NOT NULL, published_at TEXT NOT NULL, source_updated_at TEXT NOT NULL)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS sz_match_posts_date_idx ON sz_match_posts(published_date DESC, published_at DESC)`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS sz_match_watch (match_id TEXT PRIMARY KEY, sport TEXT NOT NULL, status TEXT NOT NULL, event_start TEXT NOT NULL, updated_at TEXT NOT NULL)`).run();
+}
+__name(szMatchEnsureSchema, 'szMatchEnsureSchema');
+function szMatchSlug(day, id) {
+  const hex = Array.from(new TextEncoder().encode(String(id))).map((x) => x.toString(16).padStart(2, '0')).join('');
+  return 'match-result-' + day + '-' + hex;
+}
+__name(szMatchSlug, 'szMatchSlug');
+function szMatchDate(ms) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+}
+__name(szMatchDate, 'szMatchDate');
+function szMatchDateLabel(day) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', dateStyle: 'long' }).format(new Date(day + 'T12:00:00+05:30'));
+}
+__name(szMatchDateLabel, 'szMatchDateLabel');
+function szMatchDateTime(iso) {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }).format(d) : '';
+}
+__name(szMatchDateTime, 'szMatchDateTime');
+function szMatchFacts(spec, match, snapshotAt, nowMs) {
+  const id = String(match?.id || '');
+  const startAt = Date.parse(match?.start || '');
+  if (!id || id.length > 140 || String(match?.status || '').toLowerCase() !== 'finished' || !Number.isFinite(startAt) || startAt > nowMs + 5 * 6e4) return null;
+  const title = String(match.title || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (title.length < 6) return null;
+  const scores = Array.isArray(match.scores) ? match.scores.map((s) => ({ inning: String(s?.inning || '').slice(0, 50), value: String(s?.value || '').replace(/\s+/g, ' ').trim().slice(0, 120) })).filter((s) => s.value && !/^(?:-|—|n\/a|none)$/i.test(s.value)) : [];
+  if (!scores.length && match.homeScore != null && match.awayScore != null) scores.push({ inning: '', value: String(match.homeScore).slice(0, 60) + ' - ' + String(match.awayScore).slice(0, 60) });
+  if (!scores.length && Array.isArray(match.resultRows)) scores.push(...match.resultRows.filter((r) => Number.isInteger(Number(r?.place)) && r?.driver).slice(0, 5).map((r) => ({ inning: 'P' + Number(r.place), value: String(r.driver).replace(/\s+/g, ' ').trim().slice(0, 80) })));
+  if (!scores.length) return null;
+  const finalStatus = String(match.statusText || 'Finished').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const snapshotMs = Number(snapshotAt);
+  if (!Number.isFinite(snapshotMs) || nowMs - snapshotMs > 60 * 6e4 || snapshotMs > nowMs + 5 * 6e4) return null;
+  return { id, key: spec.sport + ':' + id, sport: spec.sport, sport_label: spec.label, title, competition: String(match.series || match.matchType || '').replace(/\s+/g, ' ').trim().slice(0, 140), final_status: finalStatus, scores, start: new Date(startAt).toISOString(), source_snapshot: new Date(snapshotMs).toISOString(), venue: String(match.venue || '').replace(/\s+/g, ' ').trim().slice(0, 140) };
+}
+__name(szMatchFacts, 'szMatchFacts');
+async function szMatchGetPost(env, id) {
+  try { return await env.DB.prepare(`SELECT match_id,slug,sport,published_date,title,description,result_json,published_at,source_updated_at FROM sz_match_posts WHERE match_id=? LIMIT 1`).bind(String(id)).first(); }
+  catch (e) { return null; }
+}
+__name(szMatchGetPost, 'szMatchGetPost');
+async function szMatchGetPostBySlug(env, slug) {
+  if (!/^match-result-\d{4}-\d{2}-\d{2}-[0-9a-f]{2,280}$/.test(String(slug))) return null;
+  try { return await env.DB.prepare(`SELECT match_id,slug,sport,published_date,title,description,result_json,published_at,source_updated_at FROM sz_match_posts WHERE slug=? LIMIT 1`).bind(String(slug)).first(); }
+  catch (e) { return null; }
+}
+__name(szMatchGetPostBySlug, 'szMatchGetPostBySlug');
+async function szMatchCreatePost(env, facts, nowMs) {
+  const day = szMatchDate(nowMs);
+  const slug = szMatchSlug(day, facts.key);
+  const titleBase = (facts.title + ' Result').replace(/\s+/g, ' ').trim().slice(0, 112);
+  const title = titleBase + ' - ' + szMatchDateLabel(day) + ' | ScoreZaap';
+  const scoreText = facts.scores.map((x) => [x.inning, x.value].filter(Boolean).join(': ')).join('; ');
+  const description = (facts.sport_label + ' final: ' + scoreText + '. ' + facts.final_status + '. Recorded from ScoreZaap’s fresh scoreboard snapshot.').slice(0, 158);
+  const result = { ...facts };
+  const publishedAt = new Date(nowMs).toISOString();
+  const insert = await env.DB.prepare(`INSERT OR IGNORE INTO sz_match_posts (match_id,slug,sport,published_date,title,description,result_json,published_at,source_updated_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(facts.key, slug, facts.sport, day, title, description, JSON.stringify(result), publishedAt, facts.source_snapshot).run();
+  const row = await szMatchGetPost(env, facts.key);
+  if (!row) throw new Error('Match article did not persist');
+  return { ...row, created: Number(insert?.meta?.changes || 0) > 0 };
+}
+__name(szMatchCreatePost, 'szMatchCreatePost');
+function szMatchArticlePage(post) {
+  let facts;
+  try { facts = JSON.parse(post.result_json || '{}'); } catch (e) { return null; }
+  if (!/^match-result-\d{4}-\d{2}-\d{2}-[0-9a-f]{2,280}$/.test(String(post.slug || '')) || facts.key !== post.match_id || facts.key !== facts.sport + ':' + facts.id || !SZ_MATCH_POST_SOURCES.some((x) => x.sport === facts.sport)) return null;
+  const day = String(post.published_date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const url = 'https://scorezaap.tech/blog/' + post.slug;
+  const dateLabel = szMatchDateLabel(day);
+  const scoreRows = Array.isArray(facts.scores) ? facts.scores.filter((s) => s && s.value).slice(0, 4) : [];
+  if (!scoreRows.length) return null;
+  const scoreMarkup = scoreRows.map((x) => '<li>' + (x.inning ? '<strong>' + szBlogEsc(x.inning) + ':</strong> ' : '') + '<strong>' + szBlogEsc(x.value) + '</strong></li>').join('');
+  const body = '<section><h2>Recorded result</h2><p>This post records the match as finished in the ScoreZaap ' + szBlogEsc(facts.sport_label) + ' scoreboard snapshot. It repeats the recorded status and score only; it adds no match commentary or inferred facts. Providers may correct a result later.</p><ul>' + scoreMarkup + '</ul><p><strong>Final status:</strong> ' + szBlogEsc(facts.final_status || 'Finished') + '</p>' + (facts.competition ? '<p><strong>Competition:</strong> ' + szBlogEsc(facts.competition) + '</p>' : '') + (facts.venue ? '<p><strong>Venue:</strong> ' + szBlogEsc(facts.venue) + '</p>' : '') + '<p><strong>Match started:</strong> ' + szBlogEsc(szMatchDateTime(facts.start)) + ' IST<br><strong>Score snapshot:</strong> ' + szBlogEsc(szMatchDateTime(facts.source_snapshot)) + ' IST</p></section><section><h2>Source</h2><p>ScoreZaap ' + szBlogEsc(facts.sport_label) + ' scoreboard record, match ID ' + szBlogEsc(facts.id) + '. <a href="/">Open current scoreboards</a>.</p></section>';
+  const schema = { ['@context']: 'https://schema.org', ['@type']: 'BlogPosting', headline: String(post.title).slice(0, 150), description: String(post.description).slice(0, 158), datePublished: new Date(post.published_at).toISOString(), dateModified: new Date(post.published_at).toISOString(), author: { ['@type']: 'Organization', name: 'ScoreZaap', url: 'https://scorezaap.tech/about' }, publisher: { ['@type']: 'Organization', name: 'ScoreZaap', url: 'https://scorezaap.tech/' }, mainEntityOfPage: url, url, articleSection: facts.sport_label, inLanguage: 'en', keywords: facts.sport_label.toLowerCase() + ' final score, match result' };
+  const crumbs = { ['@context']: 'https://schema.org', ['@type']: 'BreadcrumbList', itemListElement: [{ ['@type']: 'ListItem', position: 1, name: 'Home', item: 'https://scorezaap.tech/' }, { ['@type']: 'ListItem', position: 2, name: 'Blog', item: 'https://scorezaap.tech/blog' }, { ['@type']: 'ListItem', position: 3, name: String(post.title), item: url }] };
+  const nav = '<nav class="blognav" aria-label="Main navigation"><a class="brand" href="/">&#9889; Score<span>Zaap</span></a><a href="/">Live scores</a><a href="/schedule">Schedule</a><a href="/rankings">Rankings</a><a href="/blog" aria-current="page">Blog</a><a href="/news">News</a></nav>';
+  const minutes = Math.max(2, Math.ceil(body.replace(/<[^>]*>/g, ' ').split(/\s+/).length / 200));
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + szBlogEsc(schema.headline) + '</title><meta name="description" content="' + szBlogEsc(schema.description) + '"><meta name="keywords" content="' + szBlogEsc(schema.keywords) + '"><link rel="canonical" href="' + url + '"><meta property="og:type" content="article"><meta property="og:site_name" content="ScoreZaap"><meta property="og:title" content="' + szBlogEsc(schema.headline) + '"><meta property="og:description" content="' + szBlogEsc(schema.description) + '"><meta property="og:url" content="' + url + '"><meta property="og:image" content="https://scorezaap.tech/icon-512.png"><meta name="twitter:card" content="summary"><meta name="theme-color" content="#070b12"><link rel="icon" href="/icon-192.png"><style>' + SZ_BLOG_CSS + '</style>' + szBlogLd(schema) + szBlogLd(crumbs) + '</head><body><main class="blogwrap">' + nav + '<article class="article"><div class="crumbs"><a href="/">Home</a> / <a href="/blog">Blog</a> / ' + szBlogEsc(facts.sport_label) + '</div><h1>' + szBlogEsc(schema.headline) + '</h1><p class="dek">' + szBlogEsc(schema.description) + '</p><div class="meta">By ScoreZaap · <time datetime="' + day + '">' + szBlogEsc(dateLabel) + '</time> · ' + minutes + ' min read</div>' + body + '</article><section class="related"><h2>Daily results roundup</h2><p><a href="/blog">See the daily roundup and results archive</a></p></section></main></body></html>';
+}
+__name(szMatchArticlePage, 'szMatchArticlePage');
+async function szMatchCount(env) {
+  try { const r = await env.DB.prepare(`SELECT COUNT(*) AS n FROM sz_match_posts`).first(); return Math.max(0, Number(r?.n) || 0); }
+  catch (e) { return 0; }
+}
+__name(szMatchCount, 'szMatchCount');
+async function szMatchListPosts(env, limit = 20, offset = 0) {
+  try {
+    const n = Math.max(1, Math.min(50, Math.trunc(Number(limit) || 20)));
+    const o = Math.max(0, Math.trunc(Number(offset) || 0));
+    const r = await env.DB.prepare(`SELECT match_id,slug,sport,published_date,title,description,published_at FROM sz_match_posts ORDER BY published_at DESC LIMIT ? OFFSET ?`).bind(n, o).all();
+    return Array.isArray(r?.results) ? r.results : [];
+  } catch (e) { return []; }
+}
+__name(szMatchListPosts, 'szMatchListPosts');
+async function szMatchSitemapPosts(env) {
+  try {
+    const r = await env.DB.prepare(`SELECT slug FROM sz_match_posts ORDER BY published_at DESC LIMIT 5000`).all();
+    return Array.isArray(r?.results) ? r.results.filter((x) => /^match-result-\d{4}-\d{2}-\d{2}-[0-9a-f]{2,280}$/.test(String(x.slug || ''))) : [];
+  } catch (e) { return []; }
+}
+__name(szMatchSitemapPosts, 'szMatchSitemapPosts');
+async function szMatchWatchCandidates(env, nowMs, initial) {
+  await szMatchEnsureSchema(env);
+  const feeds = [];
+  const matches = [];
+  const sourceStale = [];
+  for (const spec of SZ_MATCH_POST_SOURCES) {
+    const blob = await readKV(env, spec.key, { at: 0, matches: [] }).catch(() => null);
+    const at = Number(blob?.at || 0);
+    if (!Array.isArray(blob?.matches) || !at || nowMs - at > 2 * 36e5 || at > nowMs + 5 * 6e4) { sourceStale.push(spec.sport); continue; }
+    feeds.push({ spec, at, matches: blob.matches });
+    for (const match of blob.matches) matches.push({ spec, match, at });
+  }
+  const statesRes = await env.DB.prepare(`SELECT match_id,sport,status,event_start FROM sz_match_watch LIMIT 5000`).all();
+  const states = new Map((Array.isArray(statesRes?.results) ? statesRes.results : []).map((x) => [String(x.match_id), x]));
+  const initialMeta = await szAutoGet(env, 'match_post_watch_v1');
+  const bootstrap = !initialMeta && states.size === 0;
+  const valid = [];
+  for (const entry of matches) {
+    const id = String(entry.match?.id || '');
+    if (!id || id.length > 140) continue;
+    const status = String(entry.match?.status || '').toLowerCase();
+    const start = Date.parse(entry.match?.start || '');
+    if (!Number.isFinite(start) || start > nowMs + 5 * 6e4) continue;
+    const key = entry.spec.sport + ':' + id;
+    const before = states.get(key);
+    const watchCandidate = status === 'finished' && ((!before && start >= nowMs - 24 * 36e5) || (before && before.status !== 'finished'));
+    const facts = watchCandidate ? szMatchFacts(entry.spec, entry.match, entry.at, nowMs) : null;
+    valid.push({ id, key, spec: entry.spec, status, start, entry, before, watchCandidate, candidate: !!facts, facts });
+  }
+  return { valid, states, feeds, sourceStale, bootstrap };
+}
+__name(szMatchWatchCandidates, 'szMatchWatchCandidates');
+async function szMatchPersistStates(env, rows, nowMs) {
+  const seen = new Set();
+  const now = new Date(nowMs).toISOString();
+  const stmts = [];
+  for (const row of rows) {
+    if (seen.has(row.key)) continue;
+    seen.add(row.key);
+    stmts.push(env.DB.prepare(`INSERT INTO sz_match_watch (match_id,sport,status,event_start,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET sport=excluded.sport,status=excluded.status,event_start=excluded.event_start,updated_at=excluded.updated_at WHERE status<>excluded.status`).bind(row.key, row.spec.sport, row.status, new Date(row.start).toISOString(), now));
+  }
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+}
+__name(szMatchPersistStates, 'szMatchPersistStates');
+async function szMatchRun(env, nowMs = Date.now()) {
+  const work = await szMatchWatchCandidates(env, nowMs, false);
+  const { valid, states, sourceStale, bootstrap } = work;
+  const result = { created: 0, sampleSlug: null, staleFeeds: sourceStale, pending: 0, initialized: false };
+  if (bootstrap) {
+    const sample = valid.filter((x) => x.candidate && x.facts).sort((a, b) => b.start - a.start)[0];
+    if (sample) {
+      const post = await szMatchCreatePost(env, sample.facts, nowMs);
+      if (post.created) { result.created = 1; result.sampleSlug = post.slug; }
+    }
+    await szMatchPersistStates(env, valid, nowMs);
+    await szAutoPut(env, 'match_post_watch_v1', { initialized_at: new Date(nowMs).toISOString(), sampled_match: result.sampleSlug });
+    result.initialized = true;
+    return result;
+  }
+  const pending = valid.filter((x) => x.candidate && x.facts).sort((a, b) => a.start - b.start);
+  result.pending = pending.length;
+  const process = pending.slice(0, 12);
+  const completed = new Set();
+  for (const item of process) {
+    try {
+      const post = await szMatchCreatePost(env, item.facts, nowMs);
+      completed.add(item.key);
+      if (post.created) result.created++;
+      if (!result.sampleSlug && post.created) result.sampleSlug = post.slug;
+    } catch (e) { console.log('match article write failed', String(e.message || e).slice(0, 120)); }
+  }
+  const updateRows = valid.filter((x) => (!x.before || x.before.status !== x.status) && (!x.watchCandidate || completed.has(x.key)));
+  await szMatchPersistStates(env, updateRows, nowMs);
+  await szAutoPut(env, 'match_post_watch_v1', { initialized_at: new Date(nowMs).toISOString(), last_run: new Date(nowMs).toISOString() });
+  return result;
+}
+__name(szMatchRun, 'szMatchRun');
+function szMatchArchiveHtml(posts, page, total, pageSize) {
+  if (!posts.length && !total) return '';
+  const cards = posts.map((p) => '<article class="daily-archive-card"><span class="eyebrow">' + szBlogEsc(String(p.sport || 'sports').toUpperCase()) + ' MATCH RESULT</span><h2><a href="/blog/' + szBlogEsc(p.slug) + '">' + szBlogEsc(p.title) + '</a></h2><p>' + szBlogEsc(p.description) + '</p><div class="meta"><time datetime="' + szBlogEsc(p.published_date) + '">' + szBlogEsc(szMatchDateLabel(p.published_date)) + '</time></div></article>').join('');
+  const pages = Math.ceil(total / pageSize);
+  const nav = pages > 1 ? '<nav aria-label="Match results archive pages">' + (page > 1 ? '<a href="/blog?match_page=' + (page - 1) + '">Newer match posts</a> ' : '') + 'Page ' + page + ' of ' + pages + (page < pages ? ' <a href="/blog?match_page=' + (page + 1) + '">Older match posts</a>' : '') + '</nav>' : '';
+  return '<section class="match-results-archive"><div class="hero"><div class="eyebrow">MATCH-BY-MATCH ARCHIVE</div><h2>One results post per match</h2><p>Results recorded as finished by fresh ScoreZaap score feeds. Each match gets one permanent dated post.</p></div><div class="daily-archive-grid">' + cards + '</div>' + nav + '</section>';
+}
+__name(szMatchArchiveHtml, 'szMatchArchiveHtml');
+
+var SZ_SPORTS = { cricket: ["Cricket", "cricket"], football: ["Football", "football"], nba: ["NBA basketball", "espn_nba"], mlb: ["MLB baseball", "espn_mlb"], nhl: ["NHL hockey", "espn_nhl"], tennis: ["Tennis", "espn_tennis"], f1: ["Formula 1", "espn_f1"] };
+async function szSportPage(sport, env) {
+  const info = SZ_SPORTS[sport];
+  if (!info) return null;
+  const blob = await readKV(env, info[1], { matches: [] });
+  const matches = Array.isArray(blob.matches) ? blob.matches : [];
+  const title = info[0] + " Live Scores, Fixtures & Results - ScoreZaap";
+  const desc = "Follow " + info[0] + " live scores, fixtures, results and sports news on ScoreZaap. " + { cricket: "Read scorecards, overs and run rates.", football: "Follow goals, match status and football results.", nba: "Read NBA scores, periods and overtime.", mlb: "Follow MLB scores and baseball results.", nhl: "Follow NHL scores and hockey results.", tennis: "Read tennis scores, sets and tie-breaks.", f1: "Follow Formula 1 results and race timing." }[sport];
+  const url = "https://scorezaap.tech/sports/" + sport;
+  const lists = matches.slice(0, 50).map((m) => {
+    const names = m.title || (m.home?.name || "") + " vs " + (m.away?.name || "");
+    const href = "/match/" + sport + "/" + encodeURIComponent(m.id);
+    return '<li style="padding:14px 0;border-bottom:1px solid var(--line)"><a href="' + href + '">' + szBlogEsc(names) + '</a><br><span style="color:var(--dim)">' + szBlogEsc(m.statusText || m.status || "") + "</span></li>";
+  }).join("");
+  const category = { cricket: "Cricket", football: "Football", tennis: "Tennis", nba: "Basketball", mlb: "Baseball", nhl: "Hockey", f1: "Formula 1" }[sport];
+  const latest = SZ_NEWS_POSTS.filter((p) => p.category === category).slice(0, 3);
+  const newsLinks = latest.length ? '<section class="related"><h2>Latest ' + info[0] + ' news</h2><div class="bloggrid">' + latest.map(szNewsCard).join("") + "</div></section>" : "";
+  const guides = SZ_BLOG_POSTS.filter((p) => p.category === category).slice(0, 3);
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + title + '</title><meta name="description" content="' + desc + '"><link rel="canonical" href="' + url + '"><meta property="og:title" content="' + title + '"><meta property="og:description" content="' + desc + '"><meta property="og:url" content="' + url + '"><meta name="twitter:card" content="summary"><style>' + SZ_BLOG_CSS + "</style>" + szBlogLd({ "@context": "https://schema.org", "@type": "CollectionPage", name: title, url, description: desc }) + '</head><body><main class="blogwrap"><nav class="blognav" aria-label="Main navigation"><a href="/" class="brand">Score<span>Zaap</span></a><a href="/">Live scores</a><a href="/schedule">Schedule</a><a href="/blog">Blog</a><a href="/news">News</a></nav><section class="hero"><div class="eyebrow">' + info[0] + "</div><h1>" + info[0] + ' scores</h1><p>Fixtures, match status and results in one view. The list below is a snapshot; use the live view for automatic updates.</p><a class="readlink" href="/?tab=' + sport + '">Open live ' + info[0] + " scores &#8594;</a></section><section><h2>Matches</h2>" + (lists ? '<ul style="list-style:none;padding:0">' + lists + "</ul>" : "<p>No matches are available in this snapshot. Check the live view or return later.</p>") + '</section><section class="related"><h2>Explore every sport</h2><p>' + Object.entries(SZ_SPORTS).map(([k, v]) => '<a href="/sports/' + k + '" style="display:inline-block;margin:8px 18px 8px 0">' + v[0] + "</a>").join("") + "</p></section>" + (guides.length ? '<section class="related"><h2>Understand the score</h2><div class="bloggrid">' + guides.map(szBlogCard).join("") + "</div></section>" : "") + newsLinks + "</main></body></html>";
+}
+__name(szSportPage, "szSportPage");
+__name2(szSportPage, "szSportPage");
+var SZ_NEWS_POSTS = [{ "slug": "uefa-club-benefits-nations-league-payment", "category": "Football", "title": "UEFA announces about \u20AC31.5m in Nations League club payments", "description": "The payments cover player release for the 2024/25 competition under the Club Benefits Programme.", "body": "<p>UEFA says it will distribute approximately \u20AC31.5 million this week to clubs that released players for the 2024/25 Nations League. The announcement is part of the current Club Benefits Programme cycle.</p><p>The September 29 announcement says the programme benefits 611 clubs across UEFA member associations, including amateur clubs. The payment is the first under that cycle and forms part of a \u20AC104 million allocation for the 2024/25 and 2026/27 Nations League and the EURO 2028 qualifying competition.</p><p>UEFA lists \u20AC3,845 for each eligible player appearance on a national-team match sheet in Nations League and European Qualifiers fixtures. It separately describes a per-player, per-day mechanism for the EURO 2028 final tournament. Those are different bases for the programme's payments.</p><p>This is an announced distribution, not a claim that ScoreZaap has inspected every club's bank receipt. The amount does not describe ticket revenue or a reward for winning a match. This original summary credits UEFA's notice and keeps the programme facts separate from current football scores.</p>", "sources": [["https://www.uefa.com/news-media/news/02a9-21b4beff9982-a952de4f7c24-1000--uefa-to-distribute-31-5m-to-clubs-for-releasing-players-/", "UEFA: Club Benefits Programme distribution"]], "published": "2026-09-30T21:55:00+05:30" }, { "slug": "padres-cubs-wild-card-game-one", "category": "Baseball", "title": "Padres defeat Cubs 8-0 in Wild Card opener", "description": "MLB reports early home runs and Michael King's no-hit bid into the seventh inning.", "body": "<p>San Diego defeated Chicago 8-0 in Game 1 of their National League Wild Card Series at Petco Park on September 29, according to MLB's report published September 30.</p><p>Fernando Tatis Jr. and Manny Machado hit first-inning home runs. MLB says Michael King carried a no-hit bid into the seventh before Nico Hoerner recorded a one-out single. The bid ended before becoming a completed no-hitter.</p><p>That distinction is important in a playoff summary: pitching deep without a hit is not the same as finishing the game without allowing one. The final 8-0 score establishes the team result, not a no-hitter by itself.</p><p>Winning Game 1 puts the Padres ahead in the series; it does not confirm that the series is already won. ScoreZaap has written this original summary from the linked MLB report and has not added a Game 2 score or invented quotations. The live baseball view covers available current games.</p>", "sources": [["https://www.mlb.com/news/padres-win-nl-wild-card-game-1-2026", "MLB: Padres Wild Card opener"]], "published": "2026-09-30T21:55:00+05:30" }, { "slug": "khachanov-auger-aliassime-beijing-result", "category": "Tennis", "title": "Khachanov defeats Auger-Aliassime in Beijing", "description": "ATP reports a 6-3, 6-3 first-round win over the China Open second seed.", "body": "<p>Karen Khachanov beat Felix Auger-Aliassime 6-3, 6-3 in the China Open first round in Beijing on September 30. The ATP Tour reports that the win takes Khachanov into the second round of the ATP 500 event.</p><p>The tour identifies Auger-Aliassime as the second seed and says Khachanov did not face a break point during the match. That describes opportunities in this completed match, not a guarantee about Khachanov's next appearance.</p><p>The ATP says it was Khachanov's second victory over the Canadian during the month, following their US Open meeting. It records their tour head-to-head at 4-2 after the Beijing result. That head-to-head is separate from the 6-3, 6-3 set score.</p><p>ScoreZaap has written this summary from the tour's report in its own words. No next-round result is assumed, and no interview is attributed to ScoreZaap. Check the source for the full match account; use the tennis live view for fixtures still in progress.</p>", "sources": [["https://www.atptour.com/en/news/khachanov-auger-aliassime-beijing-2026-wednesday", "ATP: Khachanov Beijing win"]], "published": "2026-09-30T21:55:00+05:30" }, { "slug": "white-sox-astros-wild-card-game-one", "category": "Baseball", "title": "White Sox beat Astros 6-3 in Wild Card opener", "description": "AP on NBC Sports reports Chicago's Game 1 victory in Houston.", "body": "<p>The Chicago White Sox defeated the Houston Astros 6-3 in Game 1 of their American League Wild Card Series, according to an Associated Press report on NBC Sports published September 30.</p><p>The report says Colson Montgomery hit a solo home run and Sam Antonacci drove in two runs. Chicago led 3-0 after two innings and held on for the completed-game win in Houston on September 29.</p><p>The series is best of three. Winning the opener is not the same as having already won the series; the AP account lists Game 2 for Wednesday. This summary does not announce an advancement or invent the later game's score.</p><p>ScoreZaap has rewritten the confirmed result in original wording and credits the AP report below. The live baseball view is for current fixtures, while the Blog explains box-score totals. The 6-3 final is the team score, not a tally that should be increased by adding individual RBIs a second time.</p>", "sources": [["https://www.nbcsports.com/mlb/news/white-sox-strike-first-in-al-wild-card-beating-astros-6-3-in-game-1", "NBC Sports / AP: White Sox Game 1 win"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "panthers-hurricanes-overtime-opening-win", "category": "Hockey", "title": "Panthers beat Hurricanes 1-0 in overtime", "description": "NHL.com reports Forsling's late overtime goal and Markstrom's 15-save shutout.", "body": "<p>Florida beat Carolina 1-0 in overtime in their season opener, according to NHL.com's September 30 report. The game was played in Raleigh on September 29.</p><p>The league account says Gustav Forsling scored with 4.3 seconds remaining in overtime. Jacob Markstrom made 15 saves for the shutout. A goaltender's save count and the final goal tally are different measures of the same game.</p><p>The report also notes Aleksander Barkov's return after missing the preceding season and Brady Tkachuk's Florida debut. Those are participation facts in the league account, not a prediction about either player's full-season performance.</p><p>An overtime victory is a completed result, but it does not decide the standings at the end of a season. ScoreZaap has written this summary in its own words from the linked NHL report, without copying its interviews or declaring Florida a future champion. Follow available NHL fixtures in the live view.</p>", "sources": [["https://www.nhl.com/news/florida-panthers-look-like-contenders-again-in-opening-win", "NHL.com: Florida opening win"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "nations-league-third-matchday-window", "category": "Football", "title": "Nations League enters its third-matchday window", "description": "UEFA lists September 30 to October 3 for Matchday 3, with September 30 an exceptional date.", "body": "<p>UEFA's published guide lists September 30 to October 3 as the third-matchday window for the 2026/27 Nations League. It says September 30 may be used exceptionally rather than being a regular day of the Week of Football.</p><p>The extended international window runs from September 24 to October 6. UEFA says teams will generally play four Nations League games in close succession during that period. Matchday 4 is listed for October 4 to 6.</p><p>These are competition date windows, not an assertion that every country plays on September 30 or that a particular fixture has already finished. Individual opponents and kick-off times require the actual match schedule.</p><p>The guide places the quarter-finals in March 2027 and says the finals' host and dates were not yet confirmed in that account. ScoreZaap does not fill those blanks with guesses. This original update links UEFA's guide and the football live view rather than inventing a current result.</p>", "sources": [["https://www.uefa.com/uefanationsleague/news/0298-1d6ef1acfaef-b54fcf1da859-1000--2026-27-uefa-nations-league-all-you-need-to-know/", "UEFA: 2026/27 Nations League guide"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "alcaraz-michelsen-tokyo-opening-match-schedule", "category": "Tennis", "title": "Alcaraz scheduled to face Michelsen in Tokyo opener", "description": "ATP lists the Thursday match not before 4 p.m. Japan time, subject to order-of-play changes.", "body": "<p>Carlos Alcaraz is scheduled to face Alex Michelsen in his opening match at the Japan Open in Tokyo on Thursday, October 1. The ATP Tour's September 30 schedule report places it on Colosseum, not before 4 p.m. Japan Standard Time.</p><p>Not before is an earliest scheduled start, not a promise that the first serve will be at that exact minute. Earlier matches, weather or an amended order of play can affect the actual start.</p><p>The ATP identifies Alcaraz as the top seed and defending Tokyo champion. Those are tournament-context facts, not a prediction that he will win the opening match or retain the title.</p><p>ScoreZaap has written this original schedule summary from the linked tour report. It states the published venue-local time rather than silently converting it into a reader's timezone. Check the official order of play for changes and use the tennis live view when the match is underway.</p>", "sources": [["https://www.atptour.com/en/news/alcaraz-tokyo-2026-schedule-thursday", "ATP: Alcaraz Tokyo opening schedule"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "musetti-withdraws-tokyo-finger-injury", "category": "Tennis", "title": "Musetti withdraws from Tokyo after finger injury", "description": "ATP reports the withdrawal; a Shanghai return is an aim, not a confirmed clearance.", "body": "<p>Lorenzo Musetti has withdrawn from the Japan Open in Tokyo after a finger injury sustained during practice, according to the ATP Tour's September 30 report.</p><p>The tour describes a small fracture in his right ring finger and cites Musetti's own published statement. ScoreZaap is reporting that attributed information, not offering a separate medical assessment or an interview.</p><p>The ATP report says Musetti hoped to recover in time for the Shanghai Masters, scheduled from October 7 to 18. That hope is not a confirmed fitness clearance or proof that he will appear in the draw. His Tokyo withdrawal and possible next event are different levels of certainty.</p><p>Tokyo is an ATP 500 event. This original summary keeps the confirmed withdrawal separate from future availability and does not infer a replacement player from incomplete information. Use the linked ATP report for the announcement and the tennis live view for available match scores.</p>", "sources": [["https://www.atptour.com/en/news/musetti-tokyo-2026-withdrawal", "ATP: Musetti Tokyo withdrawal"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "kohli-second-icc-odi-ranking-september-30", "category": "Cricket", "title": "Kohli moves to second in latest ICC ODI batting rankings", "description": "The September 30 update places Kohli on 796 rating points behind Gill on 816.", "body": "<p>Virat Kohli rose one place to second in the ICC men's ODI batting rankings in the September 30 update. The ICC reports his rating at 796, behind Shubman Gill's 816.</p><p>The update follows Kohli's unbeaten 139 against West Indies in the first ODI. It places Daryl Mitchell on 794 and Rohit Sharma fourth on 719. These figures describe that published rankings update, not a live calculation after each ball of another match.</p><p>The ICC also reports a move for Keshav Maharaj to third in the ODI bowling rankings on 667 points. Batting and bowling are separate tables; a batting rank should not be compared directly with a bowler's position as if they were one list.</p><p>Rankings are dated snapshots and may change at a later update. ScoreZaap has written this summary from the linked ICC announcement, without claiming a future number-one ranking for Kohli or forecasting results. Check the official report for the full set of changes.</p>", "sources": [["https://www.icc-cricket.com/news/kohli-closes-in-on-top-spot-in-icc-odi-batter-rankings", "ICC: September 30 rankings update"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "india-sri-lanka-asian-games-semi-final-preview", "category": "Asian Games", "title": "India prepare for Sri Lanka Asian Games semi-final", "description": "ICC reports an October 1 semi-final in Nagoya after rain disrupted the quarter-finals.", "body": "<p>India are preparing to face Sri Lanka in the men's Asian Games cricket semi-final in Nagoya on Thursday, October 1, according to the ICC's September 30 preview. The report focuses on unfamiliar conditions and the disruption caused by rain.</p><p>The ICC says India reached the last four through their higher ranking after the quarter-final against Afghanistan was abandoned without a ball being bowled. That is an advancement under the tournament process, not a completed on-field victory over Afghanistan.</p><p>The report describes all four quarter-finals as washed out. Sanju Samson discussed the preparation for the semi-final at a pre-match press conference. This summary does not reproduce his quotations or invent an interview conducted by ScoreZaap.</p><p>A scheduled semi-final is not a guaranteed weather forecast or a confirmed result. ScoreZaap will distinguish the fixture announcement from later match information. The linked ICC report is the source for the tournament context; the live cricket view is for available current scores.</p>", "sources": [["https://www.icc-cricket.com/news/samson-unfazed-by-unknown-conditions-ahead-of-asian-games-sf", "ICC: Asian Games semi-final preview"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "justin-greaves-misses-guwahati-odi", "category": "Cricket", "title": "Justin Greaves misses Guwahati ODI with calf injury", "description": "ICC reports the West Indies opener is out of the second ODI; third-match availability remains uncertain.", "body": "<p>Justin Greaves was ruled out of West Indies' second ODI against India in Guwahati with a calf injury, according to the ICC's September 30 report. The announcement follows his century in the opening game in Thiruvananthapuram.</p><p>The ICC says Greaves sustained the injury during that first innings, in which he made 101 from 108 deliveries. It reports that he did not take part in the subsequent West Indies fielding effort.</p><p>His absence from the second ODI is confirmed in the report. Availability for the third ODI on October 3 is described as being in doubt, not as a confirmed recovery or a definite absence. ScoreZaap is not predicting his return date.</p><p>The news changes the selection context but does not establish a final result for the Guwahati match. Use the cricket live view for the ongoing contest. This original summary attributes the injury and availability information to the ICC and does not add a medical diagnosis.</p>", "sources": [["https://www.icc-cricket.com/news/west-indies-standout-ruled-out-of-guwahati-odi", "ICC: Greaves ruled out"]], "published": "2026-09-30T21:45:00+05:30" }, { "slug": "rohit-sharma-12000-odi-runs", "category": "Cricket", "title": "Rohit Sharma reaches 12,000 men's ODI runs", "description": "ICC confirms Rohit Sharma reached the milestone during India's second ODI against West Indies in Guwahati.", "body": "<p>Rohit Sharma has passed 12,000 runs in men's One Day Internationals, according to an ICC report published on September 30. The milestone came during India's second ODI against West Indies in Guwahati. The ICC says he reached it with a single off Roston Chase in the 16th over.</p><p>The ICC identifies Rohit as the third Indian to reach the mark, after Sachin Tendulkar and Virat Kohli, and the seventh batter overall. That places the achievement in a career context rather than describing only his contribution to this innings.</p><p>For readers following the live game, a career milestone and a match result answer different questions. Crossing 12,000 does not decide the chase. The target, wickets and deliveries remaining still describe the immediate contest. This article records the confirmed milestone and does not claim a final result from a match still being followed.</p><p>The ICC's list of the other batters in the club includes Ricky Ponting, Kumar Sangakkara, Sanath Jayasuriya and Mahela Jayawardena alongside Tendulkar and Kohli. It is a men's ODI aggregate, not a total across Tests, T20Is and domestic cricket.</p><p>This is an original ScoreZaap summary of the linked ICC report, not firsthand stadium reporting. For the current score, open the live match page; for the milestone account, the primary source below is the reference.</p>", "sources": [["https://www.icc-cricket.com/news/rohit-sharma-enters-elite-odi-run-club", "ICC: Rohit Sharma milestone"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "west-indies-record-405-guwahati", "category": "Cricket", "title": "West Indies set men's ODI team record with 405/7", "description": "ICC reports a West Indies record total in Guwahati, with centuries from Campbell, Hope and Jangoo.", "body": "<p>West Indies completed their innings at 405/7 in the second ODI against India in Guwahati on September 30. The ICC reports that this is their highest total in men's ODI cricket and their first innings above 400 in the format.</p><p>John Campbell scored 101, Shai Hope 104 and Amir Jangoo 114. Those three centuries explain the scale of the batting total without requiring a claim about the final match outcome. The ICC says the new team record overtook 389 against England in 2019.</p><p>The target implied by that completed innings is 406. That is a chase requirement, not an Indian score or a prediction. A record first innings can still be followed by a live chase, and this article does not declare a winner from the first half of the game.</p><p>The same ICC report records individual milestones: Hope reached 20 ODI centuries, while Kuldeep Yadav reached 200 ODI wickets during a spell that finished 2/65. The ICC describes Kuldeep as the fastest Indian spinner to that wicket mark.</p><p>The wider significance is that the team total and individual records belong to different statistical categories. ScoreZaap's live view supplies the changing match state; this original summary preserves the completed-innings facts. It is based on the linked ICC report, not copied commentary or a claim that ScoreZaap reported from the venue.</p>", "sources": [["https://www.icc-cricket.com/news/records-galore-as-india-west-indies-vie-for-the-odi-series", "ICC: Guwahati ODI records"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "bangladesh-women-australia-odi-squad", "category": "Cricket", "title": "Bangladesh name 16-player squad for Australia ODIs", "description": "Nigar Sultana Joty will captain Bangladesh for three ICC Women's Championship matches in Brisbane.", "body": "<p>Bangladesh have named a 16-player squad for their three-match women's ODI series against Australia, according to the ICC's September 30 announcement. Nigar Sultana Joty is captain and Nahida Akter is vice-captain.</p><p>The matches are part of the ICC Women's Championship. The ICC lists all three at Allan Border Field in Brisbane, on October 9, 11 and 14. Those are the published fixture dates, not a claim about local broadcast availability or a guaranteed unchanged schedule.</p><p>The announcement identifies the leadership and squad selected for the tour. Selection is not the same as a confirmed playing eleven for each match: the team sheet and any later changes must be checked closer to the fixture. Readers should not treat every named squad member as already selected to start.</p><p>For fans comparing the tour with other cricket, the competition label matters. These are women's ODIs in the Championship, not a T20 series or a men's international schedule. The venue and dates help distinguish this tour from similarly named fixtures.</p><p>This article is ScoreZaap's own summary of the ICC announcement. The linked primary report includes the full squad. Use the schedule view for available fixture listings and check the official announcement for any later changes; ScoreZaap has not independently confirmed travel plans or player availability beyond that report.</p>", "sources": [["https://www.icc-cricket.com/tournaments/icc-womens-championship/news/bangladesh-name-squad-for-historic-australia-odi-series", "ICC: Bangladesh squad announcement"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "world-cup-2027-ticket-ballot-announced", "category": "Cricket", "title": "ICC announces October 1 opening for World Cup ticket ballot", "description": "The 2027 men's Cricket World Cup ticket ballot will take entries from October1, the ICC says.", "body": "<p>The ICC says registration for the men's Cricket World Cup 2027 ticket ballot will open on October 1, 2026. Its September 30 announcement places the opening alongside the tournament's official match-schedule announcement in Cape Town.</p><p>Ballot entry is free, according to the ICC, and the process is not first come, first served. The stated entry window runs from October 1 to November 21, 2026, with valid entries considered equally regardless of when they arrive within that period.</p><p>That distinction matters for fans: a ballot is not a confirmed ticket purchase. Entering does not prove that seats have been allocated, and free registration does not mean every eventual ticket is free. Readers should use the official process for the actual terms rather than interpreting this summary as a booking offer.</p><p>The announcement says the schedule launch will take place at the Zeitz Museum of Contemporary Art Africa in Cape Town. This article reports the announced opening and window; it does not invent fixtures or ticket prices ahead of the official release.</p><p>ScoreZaap has written this summary from the linked ICC notice and is not handling registrations or collecting payment information. Check the official announcement for the live registration route and subsequent updates. No action on a fan's behalf has been taken through this article.</p>", "sources": [["https://www.icc-cricket.com/tournaments/icc-cricket-world-cup-2027/news/ticket-ballot-to-go-live-for-men-s-cricket-world-cup-2027", "ICC: World Cup ticket ballot announcement"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "spain-england-nations-league-wins", "category": "Football", "title": "Spain beat Croatia as England win in Prague", "description": "AFP and Reuters reports confirm Spain's 4-1 win and England's 2-0 victory in Nations League matches.", "body": "<p>Spain defeated Croatia 4-1 in Seville, while England won 2-0 away to Czech Republic in Prague in the September 29 Nations League games. AFP and a Reuters report published by CNA give the same final scores.</p><p>Lamine Yamal scored twice for Spain. England's goals came from Anthony Gordon and Harry Kane after the hosts were reduced to ten players. These are completed match outcomes, not predictions for the next round.</p><p>AFP reports that Spain had six points from two Group A3 games after the result. England's victory was their first of the group campaign. A group position is a snapshot after those fixtures and can change with subsequent matches.</p><p>The scorelines describe different games at different venues. Combining them into one result, or treating a two-goal scorer as the whole team total, would lose the basic context. Readers checking archives should match the opponent, competition and date.</p><p>This is an original ScoreZaap summary based on the two linked reports. It does not reproduce their match commentary or claim reporters at either stadium. Use the football live view for ongoing fixtures and the source reports for the completed-match account.</p>", "sources": [["https://www.afp.com/en/spain-brush-aside-croatia-nations-league-england-down-czechs", "AFP: Nations League results"], ["https://www.channelnewsasia.com/sport/lamine-nets-double-spain-win-again-and-england-beat-10-man-czechs-6419801", "CNA / Reuters: Spain and England wins"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "djokovic-beijing-return-win-borges", "category": "Tennis", "title": "Djokovic wins on return to Beijing", "description": "ATP reports a 6-3, 7-6(2) victory over Nuno Borges at the China Open.", "body": "<p>Novak Djokovic defeated Nuno Borges 6-3, 7-6(2) in his opening match at the China Open in Beijing on September 30, according to the ATP Tour's match report. The ATP lists the match duration as one hour and 51 minutes.</p><p>The result takes Djokovic into the next round. The second set was decided by a tie-break; the notation in brackets records Borges' points in that tie-break, not a third set score.</p><p>The ATP says this was Djokovic's first appearance at the event since 2015 and records his Beijing match record as 30 wins without a defeat after the victory. Those are event-specific figures, not an unbeaten claim across his entire tour season.</p><p>The report also notes a medical timeout during the second set. This summary does not diagnose a condition or infer availability for future matches from that timeout. The confirmed fact is the completed result reported by the tour.</p><p>ScoreZaap has written this account in its own words from the linked ATP report. For changing tennis scores, use the live view. For help reading the final-set notation, the Blog's scoring and tie-break guides explain the different layers of a tennis scoreboard.</p>", "sources": [["http://www.atptour.com/en/news/djokovic-borges-beijing-2026-wednesday", "ATP Tour: Djokovic defeats Borges"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "drummond-knicks-newcomer", "category": "Basketball", "title": "Andre Drummond joins the Knicks' returning core", "description": "An AP report on NBA.com describes the veteran center's place in New York's new-season roster.", "body": "<p>Andre Drummond is joining a largely returning Knicks roster, according to an Associated Press report published on NBA.com on September 30. The account identifies the veteran center as the notable newcomer to the team's established group.</p><p>The report says Drummond was signed after Mitchell Robinson left for Boston. It also lists returning reserves Landry Shamet, Jose Alvarado and Jordan Clarkson. Those are roster facts in the source, not a prediction about the final rotation.</p><p>For fans following a new season, signing a player and deciding his exact game role are different developments. This article does not claim a guaranteed starting place, minutes allocation or a future performance total for Drummond.</p><p>The AP report presents rebounding and veteran experience as part of the basketball context around the move. ScoreZaap is summarising that account, not adding an invented interview or making a statistical forecast from a career average.</p><p>The linked NBA.com article carries the full AP report. This original summary keeps the roster development separate from live results. Use the NBA live view for matches once they are available and the Blog for reading periods, scores and overtime.</p>", "sources": [["https://www.nba.com/news/andre-drummond-joins-knicks-media-day", "NBA.com / AP: Drummond joins Knicks"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "bruins-rangers-season-opener-shutout", "category": "Hockey", "title": "Bruins shut out Rangers 3-0 in season opener", "description": "NHL.com reports three late Boston goals and 24 saves by Jeremy Swayman.", "body": "<p>Boston beat the New York Rangers 3-0 at TD Garden in the season opener for both teams, according to NHL.com's report published on September 30. The game took place on Tuesday, September 29.</p><p>The league report says the Bruins scored three times in a span of one minute and 15 seconds late in the third period. Fraser Minten, JJ Peterka and Mark Kastelic supplied the goals, with Kastelic's coming into an empty net.</p><p>Jeremy Swayman made 24 saves for the shutout. The saves and the 3-0 final describe different sides of the performance: the team score records the goals, while the goaltender's total records stopped shots.</p><p>The account is a completed-game report, not a forecast for Boston's season. One opening result cannot establish a final standings position or a guarantee about the next fixture. ScoreZaap keeps that distinction clear rather than extending the win into an unsupported trend.</p><p>This article is an original summary of the linked NHL.com report and does not claim an independent rink-side interview. Follow available hockey fixtures in the NHL live view, and use the official report for the full sequence of the late goals.</p>", "sources": [["https://www.nhl.com/news/new-york-rangers-boston-bruins-game-recap-september-29-2026", "NHL.com: Rangers at Bruins recap"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "yankees-red-sox-wild-card-game-one", "category": "Baseball", "title": "Yankees beat Red Sox 9-0 in Wild Card opener", "description": "MLB reports ten strikeouts by Cam Schlittler and a six-RBI game by Ben Rice.", "body": "<p>The Yankees won Game 1 of their American League Wild Card Series against Boston 9-0 at Yankee Stadium, according to MLB's report published on September 30. The result came in Tuesday's opening game of the series.</p><p>Cam Schlittler struck out ten across six and one-third scoreless innings. Ben Rice hit two home runs, including a grand slam, and finished with six runs batted in. Those individual contributions are part of the completed-game account, not numbers from a later fixture.</p><p>A nine-run win in Game 1 is not the same as winning the whole series. Readers should keep the game result and series state separate, especially when another game is still to be played. This summary does not declare an advancement that the source has not reported.</p><p>Runs batted in and runs scored also answer different questions. Rice's six RBIs describe runs credited through his batting contribution; they are not an instruction to add six more to the already stated 9-0 result.</p><p>ScoreZaap has written this summary from the linked MLB report without copying its commentary or quotations. The baseball live view is for current games, while the Blog's box-score guide explains runs, hits and errors for readers following the postseason.</p>", "sources": [["https://www.mlb.com/news/yankees-win-al-wild-card-game-1-2026", "MLB: Yankees Wild Card Game 1 report"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "ocon-haas-departure-end-2026", "category": "Formula 1", "title": "Ocon to leave Haas at the end of 2026", "description": "Formula1.com, Reuters and BBC report the driver's planned departure; no next team is confirmed here.", "body": "<p>Esteban Ocon will leave Haas at the end of the 2026 season, according to Formula1.com and corroborating reports from Reuters, published by Sportstar, and BBC Sport on September 30.</p><p>The reports describe an end-of-season departure, not an immediate withdrawal from the current campaign. Reuters says Haas confirmed the split in a separate statement. This summary does not turn that announcement into a claim that a replacement has already been chosen.</p><p>Ocon joined Haas in 2025 after driving for Alpine. His next team is not established by the announcement cited here. A confirmed exit and speculation about a future seat are different categories of information, and ScoreZaap is reporting only the confirmed departure.</p><p>The driver-market development is separate from a race result. A team announcement does not change a previously completed Grand Prix result or establish what will happen at the next event. ScoreZaap will distinguish later confirmed announcements from speculation.</p><p>This is an original sourced summary, without invented quotations or an interview attributed to ScoreZaap. Further driver-market announcements may change the outlook, but this article does not predict them. Use the official and corroborating reports below to check the announcement.</p>", "sources": [["https://www.formula1.com/en/latest/article/ocon-confirms-he-will-leave-haas-at-end-of-2026-season.cJjg9W9Om5ZW6Mn9GZ75v", "Formula1.com: Ocon departure"], ["https://sportstar.thehindu.com/motorsport/esteban-ocon-leaves-haas-end-of-f1-season-confirmation/article71528181.ece", "Sportstar / Reuters: Haas departure"], ["https://www.bbc.com/sport/formula1/articles/c9e8e5k21ge5o", "BBC Sport: Haas split"]], "published": "2026-09-30T21:27:00+05:30" }, { "slug": "ghana-gambia-defeat-queiroz-response", "category": "Football", "title": "Ghana FA reports Queiroz response after Gambia defeat", "description": "The association reports a 4-2 loss after Ghana led 2-0 in Accra.", "body": "<p>Ghana lost 4-2 to The Gambia after taking a 2-0 lead at the Accra Sports Stadium, according to the Ghana Football Association's published post-match account. The report describes the game as having taken place on Tuesday.</p><p>The association says Ernest Nuamah and Felix Afena-Gyan scored Ghana's first-half goals, before The Gambia equalised before the break. The final score is the completed result, not a running tally after those opening goals.</p><p>The report says coach Carlos Queiroz took responsibility and apologised to supporters. ScoreZaap is summarising that attributed response rather than reproducing the press-conference transcript or claiming an independent interview.</p><p>The article also discusses player availability, but this summary does not turn those comments into a diagnosis for every player or a prediction for Ghana's next match. The official account below is the source. Use the football live view for current fixtures and confirmed results, rather than treating a coach's response as a new match event.</p>", "sources": [["https://www.ghanafa.org/we-are-deeply-sad-and-sorry-queiroz-apologises-to-fans-after-the-gambia-defeat", "Ghana FA: post-match response"]], "published": "2026-09-30T21:57:00+05:30" }, { "slug": "mcgrath-captain-bangladesh-odis-molineux-injury", "category": "Cricket", "title": "McGrath to captain Australia against Bangladesh", "description": "Cricket Australia says Molineux will miss the ODI series with a hip injury.", "body": "<p>Tahlia McGrath will lead Australia in the women's ODI series against Bangladesh after Sophie Molineux was ruled out with a hip injury, according to Cricket Australia's September 30 report.</p><p>The announcement came after the squad release. It explains why a captain initially named in a squad is not necessarily available for the final series. Cricket Australia says reinforcements would be added after the current Women's National Cricket League round.</p><p>The three ODIs are listed for October 9, 11 and 14 at Allan Border Field in Brisbane. The same report says Australia hoped Molineux could recover for the following T20I series against New Zealand. That is an aim, not confirmed clearance to play.</p><p>ScoreZaap is summarising the official account in original wording, without adding a medical prognosis or treating a future fixture as a finished match. This development complements Bangladesh's squad announcement already covered in News. Use the source report for updates and the cricket live view for available match scores.</p>", "sources": [["https://www.cricket.com.au/news/4583909/australia-womens-t20-odi-squads-bangladesh-new-zealand-sophie-molineux-mcgrath-gardner-captain-lucy-hamilton-injury-darcie-brown-grace-harris", "Cricket Australia: McGrath to lead Bangladesh ODIs"]], "published": "2026-09-30T21:57:00+05:30" }, { "slug": "cummins-odi-return-marsh-captain", "category": "Cricket", "title": "Cummins returns to ODI side while Marsh keeps captaincy", "description": "Cricket Australia reports the lineup for the third ODI against South Africa in Potchefstroom.", "body": "<p>Pat Cummins returned to Australia's selected ODI side for the third match against South Africa in Potchefstroom, while Mitchell Marsh remained the match captain. Cricket Australia's September 30 report identifies the arrangement and the playing eleven.</p><p>The report says this was Cummins' first ODI appearance since November 2024. It also says Australia still regarded him as their official captain in the format. Being in the side and leading that particular match are therefore separate facts.</p><p>Mitchell Starc was also selected, while Ollie Peake was recalled to bat at number four. South Africa rested Temba Bavuma, with Aiden Markram captaining and choosing to bowl after winning the toss.</p><p>This article records the announced teams and toss, not a completed result. ScoreZaap has rewritten the facts from Cricket Australia's report without copying its interviews or adding a prediction. The cricket live view is for the changing match state; the official report supplies the lineup context.</p>", "sources": [["https://www.cricket.com.au/news/4584247/toss-teams-third-odi-south-africa-v-australia-potchefstroom-ellis-injury-cummins-return-mitch-marsh-captain", "Cricket Australia: third ODI teams"]], "published": "2026-09-30T21:57:00+05:30" }, { "slug": "thailand-vietnam-asean-cup-final-place", "category": "Football", "title": "Thailand beat Vietnam 2-0 to secure ASEAN Cup final place", "description": "FIFA reports goals from Sarach Yooyen and Chaiyaphon Otton in Bandung.", "body": "<p>Thailand beat Vietnam 2-0 in Bandung on September 29 to secure a place in the FIFA ASEAN Cup final with a group match remaining, according to FIFA's match report. The result also ended Vietnam's 27-match unbeaten run.</p><p>Sarach Yooyen opened the scoring in the tenth minute. The Thai captain's long-range finish gave his team the early advantage, and substitute Chaiyaphon Otton added the second in third-minute stoppage time at the end of the match.</p><p>FIFA says Vietnam had a first-half effort disallowed after a VAR review. That effort is not included in the completed 2-0 score. The report records Thailand's second win in two tournament matches.</p><p>The official account says Thailand's next group opponent is the Philippines. It also says Vietnam need a draw against Pakistan to reach the bronze final. Those are the reported next-stage conditions, not results from matches already played.</p>", "sources": [["https://www.fifa.com/en/articles/thailand-vietnam-report-highlights-quotes", "FIFA: Thailand v Vietnam report, September 29"]], "published": "2026-09-30T22:02:00+05:30" }, { "slug": "azerbaijan-fifa-u15-world-cup-preparations", "category": "Football", "title": "Azerbaijan prepares for first FIFA U-15 World Cup and Festival", "description": "FIFA says about 4,000 boys from 190 member associations are expected in late October.", "body": "<p>Azerbaijan is preparing to host the first FIFA U-15 World Cup and Festival in late October 2026, according to FIFA's September 29 update. The organisation says the boys' competition will involve about 4,000 children from 190 member associations.</p><p>The update follows FIFA president Gianni Infantino's meeting with Azerbaijan president Ilham Aliyev in Baku. FIFA says the visit included the Hovsan Competition Complex, where most matches are due to take place.</p><p>The host team's opening group match against Timor Leste is listed for October 24 at Baku's Crystal Hall, following the opening ceremony. The same venue is scheduled to host the six tier finals on October 30.</p><p>This is a preparations and schedule update, not a match result or ticket sale notice. FIFA's announcement distinguishes the U-15 event this year from the U-20 World Cup to be co-hosted by Azerbaijan and Uzbekistan in 2027.</p>", "sources": [["https://inside.fifa.com/organisation/president/news/ilham-aliyev-infantino-meeting-azerbaijan-u15-world-cup", "FIFA: Azerbaijan preparations, September 29"]], "published": "2026-09-30T22:02:00+05:30" }, { "slug": "shubman-gill-double-century-west-indies-guwahati", "category": "Cricket", "title": "Shubman Gill passes 200 in Guwahati ODI chase", "description": "BCCI confirms Gill's double-ton milestone; ScoreZaap's completed scorecard lists 223 not out, with the earlier live snapshot preserved.", "published": "2026-09-30T22:04:00+05:30", "body": `<h2>Completion update: 10:23 PM IST</h2><p>ScoreZaap's scorecard check at 10:23 PM IST marked the match completed with India winning by eight wickets. It listed Gill not out on 223 from 133 balls, with 26 fours and eight sixes. This completion update is attributed to ScoreZaap's provider-backed scorecard, not an official BCCI final-result report. The original live snapshot below is preserved so its earlier figures are not mistaken for the final innings.</p><p>Shubman Gill has passed 200 against West Indies in the second ODI in Guwahati. BCCI's official video page, titled "Shubman Gill rises to occasion with his 2nd Double Ton", confirms the milestone.</p><h2>Live snapshot: 10:03 PM IST, September 30</h2><p>ScoreZaap's live scorecard, checked at 10:03 PM IST, showed Gill batting on 215 from 128 balls, with 25 fours and eight sixes. It showed India on 388/2 after 42 overs, needing 18 runs from 48 balls against West Indies' 405/7.</p><p>Those exact figures are a time-stamped ScoreZaap scorecard snapshot, not an official BCCI score report or Gill's final innings. The match was still marked ongoing at that check. No winner or final score is being declared here.</p><p>This is ScoreZaap's original summary. The double-century milestone has an official BCCI cross-check; the changing innings figures may move after publication. <a href="/match/cricket/cbz_151543">Open the live India v West Indies scorecard</a> for the latest available state.</p>`, "sources": [["https://www.bcci.tv/videos/s-shubman-gill-rises-to-occasion-with-his-2nd-double-ton-s68h9", "BCCI: Gill second double ton, September 30"], ["https://scorezaap.tech/match/cricket/cbz_151543", "ScoreZaap live scorecard: snapshot checked 10:03 PM IST"]], "modified": "2026-09-30T22:27:00+05:30" }, { "slug": "rohit-sharma-century-west-indies-guwahati", "category": "Cricket", "title": "Rohit Sharma scores a century in Guwahati ODI chase", "description": "BCCI marks Rohit's hundred; ScoreZaap's 10:06 PM IST scorecard check records 101 from 75 balls.", "published": "2026-09-30T22:08:00+05:30", "body": `<p>Rohit Sharma made a century in India's second ODI against West Indies in Guwahati on September 30. BCCI's official video page, "Rohit Sharma's Joyous Hundred Celebration", provides an official cross-check for the hundred.</p><h2>Innings record checked at 10:06 PM IST</h2><p>ScoreZaap's live scorecard, checked at 10:06 PM IST, listed Rohit on 101 from 75 balls, with 10 fours and six sixes. His dismissal was recorded as lbw to Jayden Seales. These exact innings figures and dismissal wording are attributed to that ScoreZaap scorecard snapshot, not presented as a separate official BCCI score report.</p><p>The hundred came during a match in which Rohit also passed 12,000 men's ODI runs. The ICC's official milestone report identifies him as the third Indian and seventh batter overall to reach that career mark. <a href="/news/rohit-sharma-12000-odi-runs">Read our separate 12,000-run milestone summary</a>.</p><p>At the scorecard check, the match was still marked ongoing. This article does not declare the chase result or a final India total. It is an original ScoreZaap summary, with the official hundred and career-milestone cross-checks linked below. <a href="/match/cricket/cbz_151543">Open the live scorecard</a> for the changing match state.</p>`, "sources": [["https://www.bcci.tv/videos/s-rohit-sharmas-joyous-hundred-celebration-ubmbg", "BCCI: Rohit hundred celebration, September 30"], ["https://www.icc-cricket.com/news/rohit-sharma-enters-elite-odi-run-club", "ICC: Rohit 12,000 ODI runs"], ["https://scorezaap.tech/match/cricket/cbz_151543", "ScoreZaap scorecard, checked 10:06 PM IST"]] }, { "slug": "canucks-oilers-overtime-opening-6-5", "category": "Hockey", "title": "Canucks beat Oilers 6-5 in overtime opener", "description": "NHL reports Paul Cotter scored the winner at 1:59 of overtime.", "body": "<p>Vancouver beat Edmonton 6-5 in overtime at Rogers Place on September 29, according to NHL's September 30 recap. Paul Cotter scored the deciding goal 1:59 into the extra period after the Canucks had lost a three-goal lead in the third.</p><p>Vancouver moved from 2-2 to 5-2 with goals from Jonathan Lekkerimaki, Max Sasson and Elias Pettersson in the first 5:15 of the third period. Edmonton responded with two goals from Vasily Podkolzin and another from Evan Bouchard, whose third goal of the night completed his hat trick.</p><p>Podkolzin's equaliser came with 43 seconds left in regulation, sending the contest to overtime. Cotter then forced a turnover, exchanged passes with Sasson and finished the winner. He scored twice in the game, including Vancouver's short-handed opening goal.</p><p>The result gave Manny Malhotra a win in his Canucks coaching debut. NHL lists the return meeting in Vancouver for Thursday. The final 6-5 result is distinct from the earlier 5-2 lead; no later game result is implied.</p>", "sources": [["https://www.nhl.com/news/vancouver-canucks-edmonton-oilers-game-recap-september-29-2026", "NHL: Canucks v Oilers recap"]], "published": "2026-09-30T22:25:00+05:30" }, { "slug": "beijing-struff-bu-gea-opening-results", "category": "Tennis", "title": "Struff, Bu and Gea join Beijing opening-round winners", "description": "ATP's September 30 results list records three further singles victories.", "body": "<p>Jan-Lennard Struff beat Thiago Agustin Tirante 6-1,6-4 in Beijing's round of 32 on September 30, according to ATP's official results list. The straight-set result is among the opening-day wins beyond the Djokovic and Khachanov matches already covered by ScoreZaap.</p><p>Wild card Yunchaokete Bu needed three sets to beat Juan Manuel Cerundolo 6-2,5-7,6-4. The middle-set loss did not end Bu's tournament; the third-set win completed his progression to the next round.</p><p>Qualifier Arthur Gea beat wild card Zhizhen Zhang 6-4,6-3. Those entry labels describe how players entered this draw, not a prediction of their chances or a new ranking.</p><p>ATP also lists Alexander Bublik and Juncheng Shang beating Francisco Cerundolo and Arthur Rinderknech 3-6,6-4,10-7 in doubles. The final 10-7 is the match-tiebreak score, not an ordinary third set played to ten games. This summary records the published results without inventing rallies or quotations.</p>", "sources": [["https://www.atptour.com/en/news/beijing-2026-results", "ATP: Beijing September30 results"]], "published": "2026-09-30T22:25:00+05:30" }, { "slug": "malaysia-indonesia-asean-cup-scoreless-draw", "category": "Football", "title": "Malaysia and ten-man Indonesia draw 0-0 in ASEAN Cup", "description": "FIFA reports a first-half red card for Thom Haye in Jakarta.", "body": "<p>Malaysia and Indonesia drew 0-0 at the Gelora Bung Karno in Jakarta on September 28, according to FIFA's match report. Both had won their opening group matches before the scoreless meeting.</p><p>Indonesia's Thom Haye received a straight red card after a VAR review of his challenge on Arif Aiman in the first half. Playing with ten did not prevent Indonesia from creating chances: FIFA records a Dean James effort saved by Syihan Hazmi and a Kevin Diks shot into the side netting.</p><p>Late in the match, Maarten Paes made a save and Justin Hubner cleared off the goal line as Malaysia sought a winner. Those defensive interventions preserved the draw; they are not goals to add to the completed score.</p><p>The split points left both teams one point ahead of Singapore, with final group fixtures ahead. FIFA lists Malaysia against Singapore and Indonesia against Bangladesh on Thursday. The upcoming fixtures do not establish either team's final group position.</p>", "sources": [["https://www.fifa.com/en/tournaments/mens/asean-cup/2026/articles/malaysia-indonesia-report-highlights-quotes", "FIFA: Malaysia v Indonesia, September28"]], "published": "2026-09-30T22:25:00+05:30" }, { "slug": "egypt-morocco-senegal-afcon-qualifying-results", "category": "Football", "title": "Egypt score five as Morocco and Senegal win AFCON qualifiers", "description": "CAF reports a Marmoush double in Juba and Algeria's comeback draw in Burundi.", "body": "<p>Egypt beat South Sudan 5-0 in Juba on September 29, according to CAF's official qualifying roundup. Omar Marmoush scored twice as Egypt moved to four points from their opening two Group B matches after the earlier draw with Angola.</p><p>Mostafa Zico gave Egypt a 36th-minute lead. Marmoush scored in the 49th and 83rd minutes, with Ibrahim Adel making it 3-0 between those goals. Substitute Hamza Abdelkarim added the fifth in second-half stoppage time.</p><p>Elsewhere, Morocco beat Lesotho 2-0 through Brahim Diaz and Azzedine Ounahi. CAF says the result left Morocco on six points after two Group A matches, with four goals scored and none conceded across those opening fixtures. Senegal beat Ethiopia 1-0 through Ibrahim Mbaye's 11th-minute goal, moving to four points in Group J.</p><p>Algeria recovered from a two-goal deficit to draw 2-2 away to Burundi in Group I. Mohamed El Amine Belloumi reduced the deficit before Adil Boulbina equalised in the 63rd minute. Mozambique beat Sudan 4-1, with Chamito scoring twice, while Comoros beat Namibia 1-0 through Benjaloud Youssouf.</p><p>These are completed results from CAF's September 29 account. The early group points are not final qualification decisions. This original ScoreZaap roundup does not reproduce the source's photographs or claim interviews with the teams.</p>", "sources": [["https://www.cafonline.com/afcon2025/news/egypt-hit-five-as-morocco-and-senegal-win-while-algeria-fight-back-in-afcon-2027-qualifiers/", "CAF: September 29 qualifying roundup"]], "published": "2026-09-30T22:30:00+05:30" }, { "slug": "braves-phillies-riley-wild-card-game-one", "category": "Baseball", "title": "Riley homer lifts Braves past Phillies 5-3 in Wild Card opener", "description": "MLB reports a three-run eighth-inning home run off Jhoan Duran in Atlanta.", "body": "<p>Atlanta beat Philadelphia 5-3 in Game 1 of the National League Wild Card Series on September 29 at Truist Park. MLB's official report credits Austin Riley's three-run homer off Jhoan Duran with two outs in the eighth inning as the decisive swing.</p><p>The Phillies had led 3-2 after J.T. Realmuto's two-run triple in the seventh. Riley's home run changed that one-run deficit into Atlanta's two-run winning margin. The final score is distinct from either of those earlier game states.</p><p>Chris Sale recorded nine strikeouts over 6 1/3 innings in the Braves' start. MLB says he was charged with three runs; two scored on Realmuto's triple after Didier Fuentes entered from the bullpen. A pitcher can be charged for inherited runners even after leaving the mound.</p><p>The victory put Atlanta ahead in the best-of-three series, not through to the next round. MLB's report shifts attention to Game 2, but this article does not add a result for that game or treat a historical series-win percentage as a prediction.</p><p>This is original ScoreZaap summary writing from the linked MLB account. No player quotation or agency image has been copied. Read the baseball hub for available current scores, and the blog's RBI and earned-run guides for scoring context.</p>", "sources": [["https://www.mlb.com/braves/news/braves-win-nl-wild-card-series-game-1-2026?t=nl-wild-card-series-a-coverage", "MLB: Braves Game 1 report"]], "published": "2026-09-30T22:30:00+05:30" }, { "slug": "sepang-bahrain-grand-prix-tyre-compounds-2026", "category": "Formula 1", "title": "C2, C3 and C4 tyres selected for F1 return to Sepang", "description": "F1's September 30 report names the compounds for the rescheduled Bahrain Grand Prix in Malaysia.", "published": "2026-09-30T22:31:00+05:30", "body": "<p>Pirelli has selected C2, C3 and C4 as the hard, medium and soft tyres for the rescheduled Bahrain Grand Prix at Malaysia's Sepang International Circuit, according to Formula 1's September 30 announcement. The event marks F1's return to Malaysia after nine years.</p><p>The published allocation lists two sets of hard tyres, three medium and eight soft for each driver, plus intermediate and full-wet tyres if conditions require them. An extra soft set is reserved for drivers reaching Q3.</p><p>F1's account highlights thermal management and the lack of relevant data for the current cars at Sepang. It says Friday practice will be important for drivers learning the circuit and teams assessing balance and tyre behaviour. Those are preparation challenges, not a prediction that a particular driver or strategy will win.</p><p>The circuit guide explains the unusual event name: Malaysia stepped in after the Bahrain Grand Prix was moved from its original April slot. The weekend therefore takes place at Sepang, not Bahrain's Sakhir circuit. This original summary keeps that distinction rather than silently changing the official race name.</p>", "sources": [["https://www.formula1.com/en/latest/article/what-tyres-will-the-teams-and-drivers-have-for-the-2026-bahrain-grand-prix-in-malaysia.4vcrMxYY9DWg7PwyiNMrEV", "Formula1: tyre allocation announcement"], ["https://www.formula1.com/en/latest/article/circuit-guide-everything-you-need-to-know-about-the-sepang-international-circuit.2KTLvyxBXmwVftSJxmYeZ2", "Formula1: Sepang circuit and event context"]] }, { "slug": "tunisia-eswatini-u23-afcon-first-leg-wins", "category": "Football", "title": "Tunisia and Eswatini take first-leg leads in U-23 qualifiers", "description": "CAF reports two Omar Ben Ali goals for Tunisia and an Eswatini away win in Malawi.", "body": "<p>Tunisia beat Benin 2-0 at the Stade Olympique de Sousse in the first round of the U-23 Africa Cup of Nations Egypt 2027 qualifiers, according to CAF's September 29 account. Omar Ben Ali scored both goals after a goalless first half.</p><p>Ben Ali converted a penalty in the 57 th minute and added another in the 97 th. CAF says Benin had an effort disallowed for a foul in the build-up shortly before the second goal. That disallowed effort is not part of the completed 2-0 score.</p><p>Eswatini also secured an away advantage by beating Malawi 1-0 in Lilongwe. Sibonelo Vlakati scored the only goal in the 73 rdminute. These are first-leg leads, not completed aggregate victories or qualification for the finals.</p><p>CAF lists the Tunisia-Benin return for October 5 in Lome, with the aggregate winner due to face Gabon in round two. Eswatini-Malawi is listed for October 6, with that winner due to meet Algeria. The same account says 42 nations are competing for seven places alongside hosts Egypt.</p>", "sources": [["https://www.cafonline.com/caf-u-23-africa-cup-of-nations/news/tunisia-take-control-as-eswatini-claim-away-win-in-u-23-afcon-qualifiers/", "CAF: U-23 first-leg report, September29"]], "published": "2026-09-30T22:34:00+05:30" }, { "slug": "guinea-bissau-nigeria-three-goal-afcon-win", "category": "Football", "title": "Guinea-Bissau beat Nigeria 3-0 in AFCON qualifier", "description": "CAF reports goals from Franculino, Mama Balde and Alvaro Djalo.", "body": "<p>Guinea-Bissau beat Nigeria 3-0 in the September 29 AFCON 2027 qualifiers, according to CAF's official roundup. The result left Guinea-Bissau with six points from their opening two Group L matches.</p><p>Franculino opened the scoring after 15 minutes. Mama Balde added the second during the second half and Alvaro Djalo completed the score in the fifth minute of stoppage time. Nigeria had won their opener against Madagascar but could not repeat that recovery.</p><p>CAF says Tanzania is automatically qualified as a co-host, so only the highest-placed side among Guinea-Bissau, Nigeria and Madagascar qualifies alongside Tanzania from this group. A strong two-match start therefore gives Guinea-Bissau an advantage but is not itself a confirmed finals berth.</p><p>This original summary focuses on the confirmed Nigeria result and qualifying context. Ghana's separate loss to The Gambia is already covered in ScoreZaap News. No future match result, coach quotation or copied match photograph has been added.</p>", "sources": [["https://www.cafonline.com/afcon2025/news/nigeria-and-ghana-stunned-as-afcon-qualifying-delivers-major-shocks/", "CAF: qualifying roundup, September29"]], "published": "2026-09-30T22:34:00+05:30" }, { "slug": "pakistan-asian-games-washout-progress", "category": "Asian Games", "title": "Pakistan reach Asian Games semi-finals after washout", "description": "PCB says higher ICC ranking decided advancement after no play against Hong Kong.", "body": "<p>Pakistan advanced to the men's Asian Games cricket semi-finals after their quarter-final against Hong Kong was abandoned without a ball being bowled in Nisshin on September 28. PCB's official release attributes the abandonment to persistent rain.</p><p>The Sahibzada Farhan-led team progressed because of its higher ICC ranking under the tournament playing conditions. This was advancement without play, not a victory by runs or wickets and not an innings with a score to reconstruct.</p><p>PCB's release listed both semi-finals for October 1 at the same venue. At the time of that announcement, Pakistan's next opponent was still described as the winner of the scheduled Bangladesh-Malaysia quarter-final. This article does not turn that older pending-opponent wording into a new confirmed result.</p><p>The distinction matters when checking knockout brackets after bad weather: a team can move forward while the scorecard correctly says no play. For changing fixture details use the current tournament source, rather than treating this September 28 release as a live schedule.</p>", "sources": [["https://www.pcb.com.pk/news-detail/pakistan-qualify-for-asian-games-semi-finals-after-rain-washes-out-hong-kong-quarter-final.html", "PCB: Pakistan advancement, September28"]], "published": "2026-09-30T22:34:00+05:30" }, { "slug": "india-compound-archery-golds-asian-games-2026", "category": "Asian Games", "title": "India win two compound archery golds at Asian Games", "description": "Olympics.com reports women's team and mixed team victories, plus an LA 2028 quota.", "body": "<p>India won gold in both the women's compound team and compound mixed team archery events at the Asian Games on September 30, according to Olympics.com's official live report.</p><p>Jyothi Surekha Vennam, Prithika Pradeep and Chikitha Taniparthi beat China 238-234 in the women's team final. Olympics.com says the 238-point finish equalled the women's compound team world record set by South Korea in 2014. India had led 119-116 halfway through the final.</p><p>Chikitha also partnered Sahil Jadhav in the mixed team final against South Korea. That match finished 157-157 before a shoot-off, in which both Indian archers scored 10 while South Korea's final arrow scored nine. The shoot-off decided the winner; it is separate from the tied 157-point regulation score.</p><p>Olympics.com says the mixed team victory secured a quota place for India at LA 2028, where compound mixed team archery will make its Olympic debut. A country quota is not the same as naming the athletes who will eventually compete at the Olympics.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-live-scores-updates-results-india-september-30", "Olympics.com: September30 live report"]], "published": "2026-09-30T22:36:00+05:30" }, { "slug": "india-womens-relay-asian-games-gold-2026", "category": "Asian Games", "title": "India women win 4x400m relay gold in Nagoya", "description": "Official reports record 3:29.69 for India ahead of Bahrain and China.", "body": "<p>India won the women's 4x400m relay at the Asian Games in Nagoya on September 29. Olympics.com lists Kiran Pahal, Poovamma Machettira, Prachi Choudhary and Vithya Ramraj in the winning team, which clocked 3:29.69.</p><p>Bahrain took silver in 3:30.21 and China bronze in 3:31.02, according to the same official account. World Athletics' event report also confirms India's 3:29.69 gold-medal performance.</p><p>India added bronze in the men's 4x400m relay, with Dharmveer Choudhary, Manu Thekkinalil, Jay Kumar and Vishal Thennarasu Kayalvizhi recording 3:01.61.</p><p>World Athletics says Gulveer Singh finished with three individual medals, including silver in the 1500m and 10,000m and bronze in the 5000m.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-athletics-india-women-4x400m-relay-gold-results", "Olympics.com: relay results"], ["https://worldathletics.org/news/report/zhang-yavi-pathirage-asian-games-2026-nagoya", "World Athletics: Asian Games report"]], "published": "2026-09-30T22:36:00+05:30" }, { "slug": "india-mens-compound-team-gold-completes-sweep", "category": "Asian Games", "title": "India men win compound archery gold to complete team sweep", "description": "Sahil Jadhav, Ganesh Mani Ratnam Thirumuru and Kushal Dalal beat China 238-237.", "body": "<p>India added the men's compound team gold at the Asian Games on September 30, completing victories in all three compound team events that day. Olympics.com's official report records a 238-237 win over China.</p><p>Sahil Jadhav, Ganesh Mani Ratnam Thirumuru and Kushal Dalal formed the winning men's team. After trailing 60-58 at the opening end, India scored the maximum 180 from its remaining 18 arrows. China still led 179-178 before the final end, but India closed with six successive tens.</p><p>The men's final followed India's women's team gold and mixed team gold. Those are three separate event medals, not one medal multiplied by the number of archers. Individual compound titles were not part of this team-event sweep.</p><p>The mixed team result also secured a country quota for India at LA 2028. That qualification fact applies to the mixed event, not to every archer who won a team gold. The official report makes clear that eventual Olympic participation depends on national team selection.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-archery-compound-india-gold-la-2028-olympics-quota", "Olympics.com: compound team finals"]], "published": "2026-09-30T23:05:00+05:30" }, { "slug": "neeru-dhanda-kynan-chenai-trap-mixed-gold", "category": "Asian Games", "title": "Neeru Dhanda and Kynan Chenai win Asian Games trap mixed gold", "description": "India finish on 34 targets, ahead of Qatar on 32 and China on 23 in the official report.", "body": "<p>Neeru Dhanda and Kynan Chenai won the Asian Games mixed team trap final on September 30. Olympics.com records India on 34targets, Qatar on 32 for silver and China on 23for bronze.</p><p>The Indian pair had qualified fourth for the four-team final with 136, behind China, Qatar and Iran. Qualification and final figures are separate stages, so the 136 is not added to India's 34 in the medal final.</p><p>Olympics.com describes the winning final score as an Asian record. The result followed Neeru's women's individual trap gold a day earlier and her women's trap team silver, giving her two golds and a silver at these Games.</p><p>India's winning pair represents one gold in the country's event medal tally. The athletes' personal medals can each reflect that team result, but a country table counts the event once. ScoreZaap's medal page keeps the official country snapshot separate from individual event reports.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-shooting-trap-mixed-team-gold-medal-report", "Olympics.com: trap mixed team final"]], "published": "2026-09-30T23:05:00+05:30" }, { "slug": "india-pakistan-asian-games-hockey-semi-final-october-one", "category": "Asian Games", "title": "India vs Pakistan hockey semi-final set for October 1", "description": "Olympics.com lists the Asian Games men's semi-final at 1:00 PM IST in Kakamigahara.", "body": "<p>India and Pakistan are scheduled to meet in the Asian Games men's hockey semi-final on Thursday, October 1. Olympics.com lists a 1:00 PM IST start at the Gifu Prefectural Green Stadium in Kakamigahara, Japan.</p><p>The winner advances to the gold-medal match. This is a preview of a scheduled game, not a result or a claim that either side has already reached the final. Readers should check the current official schedule before making viewing plans.</p><p>India enter as the reigning Asian Games champions following their Hangzhou 2023 gold. Olympics.com describes India as four-time winners and Pakistan as eight-time winners. Those are historical men's hockey titles, separate from the current Games medal table.</p><p>The source lists Sony LIV streaming and Sony Sports television coverage in India. Availability, language options and any subscription conditions should be checked with the broadcaster; this article does not promise free access. The 1:00 PM time is explicitly India time, not Japan local time.</p>", "sources": [["https://www.olympics.com/en/news/india-vs-pakistan-asian-games-2026-hockey-semi-final-live-streaming-telecast", "Olympics.com: men's hockey semi-final schedule"]], "published": "2026-09-30T23:24:00+05:30" }, { "slug": "priya-kapil-asian-games-boxing-bronze-lovlina-final", "category": "Asian Games", "title": "Priya and Kapil take boxing bronze; Lovlina reaches final", "description": "Olympics.com confirms two semi-final defeats and Lovlina Borgohain's 3-2 win in the women's 75kg event.", "body": "<p>Priya Ghanghas and Kapil Pokhariya won Asian Games boxing bronze medals after losing their semi-finals in Aichi on September 29, according to Olympics.com. In this competition, both losing semi-finalists receive bronze.</p><p>Priya lost the women's 60kg bout to China's Yang Chengyu by a 4-1 split decision. Kapil lost the men's 90kg semi-final to Uzbekistan's Turabek Khabibullaev, also by a 4-1 split decision. The decision numbers describe judges' verdicts, not goals or a boxing round score.</p><p>Lovlina Borgohain won her women's 75kg semi-final against Kazakhstan's Natalya Bogdanova by a 3-2 split decision. That victory earned a place in the gold-medal bout, but it does not make the final medal colour gold yet.</p><p>Olympics.com names China's Bao Ziyi as Lovlina's scheduled final opponent. This report separates confirmed bronze medals and a confirmed semi-final win from the still-pending final. It does not predict the winner or add athlete medal counts to an unverified live country total.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-boxing-priya-ghanghas-kapil-pokhariya-bronze-medal", "Olympics.com: boxing semi-final results"]], "published": "2026-09-30T23:24:00+05:30" }, { "slug": "india-women-hockey-asian-games-final-korea-win", "category": "Asian Games", "title": "India women beat South Korea 2-0 to reach hockey final", "description": "Ishika Chaudhary and Salima Tete score as India set up a gold-medal match against China.", "body": "<p>India reached the Asian Games women's hockey final with a 2-0 win over South Korea on September 30. Olympics.com's official report credits Ishika Chaudhary in the 44th minute and captain Salima Tete in the 48th.</p><p>The first half ended without a goal. Ishika broke the deadlock from a penalty-corner variation near the end of the third quarter, before Salima doubled India's lead in the final quarter. The result is a completed semi-final win, not a final gold medal.</p><p>India are scheduled to face reigning champions China in the final. Olympics.com reports that China advanced after a shootout against Japan in the other semi-final. That deciding method belongs to China's match and should not be attached to India's 2-0 result.</p><p>The source says the Games champions earn an early Olympic berth. India's qualification opportunity is therefore still tied to winning the final; this semi-final victory alone is not confirmation of that berth. The country medal-table snapshot and match report answer different questions.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-hockey-women-semi-final-india-vs-south-korea-match-report", "Olympics.com: women's hockey semi-final result"]], "published": "2026-09-30T23:26:00+05:30" }, { "slug": "chikitha-asian-games-compound-quarter-final-exit", "category": "Asian Games", "title": "Chikitha exits Asian Games compound archery quarter-final", "description": "Olympics.com reports a 144-143 defeat to Indonesia\u2019s Nurisa Dian Ashrifah in the women\u2019s individual event.", "body": "<p>India\u2019s Chikitha Taniparthi lost her women\u2019s compound individual quarter-final 144-143 to Indonesia\u2019s Nurisa Dian Ashrifah at the Asian Games on October 1, according to Olympics.com\u2019s morning live report.</p><p>The result ends Chikitha\u2019s campaign in this individual event. It is a one-point match margin, not a medal-table total or a set-score result. The morning schedule had listed her later rounds only if she qualified; the quarter-final defeat means those conditional entries should not be read as confirmed appearances.</p><p>This report covers the completed quarter-final only. India\u2019s men\u2019s compound programme and other sports have their own results and schedule. The previous day\u2019s team successes do not predict the outcome of an individual match, and this result does not change a country medal total by itself.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-live-scores-updates-results-india-october-1", "Olympics.com: October 1 live report, completed archery quarter-final"], ["https://www.olympics.com/en/news/asian-games-2026-india-schedule-today-october-1-thursday", "Olympics.com: conditional individual-round schedule"]], "published": "2026-10-01T07:46:00+05:30" }, { "slug": "india-sepaktakraw-vietnam-quadrant-group-win", "category": "Asian Games", "title": "India beat Vietnam in men\u2019s quadrant sepaktakraw group match", "description": "Olympics.com reports a 2-0 win, with games of 15-12 and 15-9, in Group A.", "body": "<p>India\u2019s men\u2019s quadrant sepaktakraw team beat Vietnam 2-0 in Group A at the Asian Games on October 1, according to Olympics.com\u2019s morning live report. The individual game scores were 15-12 and 15-9.</p><p>The report describes it as India\u2019s second consecutive group win. This is a completed group-stage result, not a final or a confirmed medal. A 2-0 match result and the two game scores describe different layers of the same contest.</p><p>Olympics.com\u2019s October 1 schedule lists India\u2019s remaining group match against Myanmar at 10:30 AM Indian Standard Time. That fixture is still separate from the completed Vietnam result; this report does not predict its winner or assume qualification from a result that has not been checked.</p>", "sources": [["https://www.olympics.com/en/news/asian-games-2026-live-scores-updates-results-india-october-1", "Olympics.com: completed men\u2019s quadrant Vietnam result"], ["https://www.olympics.com/en/news/asian-games-2026-india-schedule-today-october-1-thursday", "Olympics.com: Myanmar fixture, Indian Standard Time"]], "published": "2026-10-01T07:46:00+05:30" }];
+var SZ_NEWS_IMAGES = { "shubman-gill-double-century-west-indies-guwahati": { "url": "https://scorezaap.tech/news-images/gill-double.png", "alt": "Shubman Gill: 200-plus double-century milestone against West Indies in Guwahati, September 30, 2026. Original ScoreZaap graphic.", "width": 1200, "height": 630 }, "rohit-sharma-century-west-indies-guwahati": { "url": "https://scorezaap.tech/news-images/rohit-hundred.png", "alt": "Rohit Sharma: century milestone against West Indies in Guwahati, September 30, 2026. Original ScoreZaap graphic.", "width": 1200, "height": 630 } };
+function szNewsFigure(p) {
+  const i = SZ_NEWS_IMAGES[p.slug];
+  return i ? '<figure style="margin:24px 0"><img src="' + i.url + '" alt="' + szBlogEsc(i.alt) + '" width="1200" height="630" style="display:block;width:100%;height:auto;border-radius:14px"><figcaption style="font-size:13px;color:#a7b3c6;margin-top:10px">Original ScoreZaap graphic. Milestone checked against the linked BCCI video; not a player photograph or final match result.</figcaption></figure>' : "";
+}
+__name(szNewsFigure, "szNewsFigure");
+__name2(szNewsFigure, "szNewsFigure");
+function szNewsSportLink(p) {
+  if (p.category === "Asian Games") return "/asian-games";
+  const s = { Cricket: "cricket", Football: "football", Tennis: "tennis", Basketball: "nba", Hockey: "nhl", Baseball: "mlb", "Formula 1": "f1" }[p.category];
+  return s ? "/sports/" + s : "/";
+}
+__name(szNewsSportLink, "szNewsSportLink");
+__name2(szNewsSportLink, "szNewsSportLink");
+function szNewsDate(p) {
+  return new Intl.DateTimeFormat("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Kolkata" }).format(new Date(p.published));
+}
+__name(szNewsDate, "szNewsDate");
+__name2(szNewsDate, "szNewsDate");
+function szNewsSorted() {
+  return SZ_NEWS_POSTS.slice().sort((a, b) => new Date(b.published) - new Date(a.published));
+}
+__name(szNewsSorted, "szNewsSorted");
+__name2(szNewsSorted, "szNewsSorted");
+function szNewsCard(p) {
+  return szBlogCard({ ...p, body: p.body }).replaceAll("/blog/" + p.slug, "/news/" + p.slug).replace("Read guide", "Read news").replace("September 30, 2026", szNewsDate(p));
+}
+__name(szNewsCard, "szNewsCard");
+__name2(szNewsCard, "szNewsCard");
+var SZ_ASIAN_SCHEDULE = [["Aquatics - Water polo", "20 September\u20133 October", "Nagoya City General Gymnasium [Rainbow Pool], Nagoya"], ["Archery", "26 September\u20133 October", "Okazaki Chuo Sogo Park Multipurpose Square, Okazaki"], ["Athletics", "23\u201329 September", "Nagoya City Mizuho Park Athletic Stadium, Nagoya, and Aichi Prefectural Government and Nagoya City Halls Loop Course, Nagoya"], ["Badminton", "20\u201329 September", "Ichinomiya City Municipal Gymnasium, Ichinomiya"], ["Baseball/softball - Baseball", "21\u201327 September", "Okazaki Chuo Sogo Park Baseball Stadium, Okazaki, and Toyohashi Municipal Baseball Stadium, Toyohashi"], ["Baseball/softball - Softball", "26 September\u20133 October", "Anjo Softball Ground, Anjo"], ["Basketball - Basketball", "10\u201326 September", "Aichi International Arena, Nagoya"], ["Basketball - 3X3 Basketball", "21\u201325 September", "Kinjo Futo Station Square Venue, Nagoya"], ["Boxing", "21 September\u20132 October", "Nishio Gymnasium, Nishio"], ["Breaking", "2\u20133 October", "Aichi Sky Expo, Tokoname"], ["Paddlesport - Canoe sprint", "23\u201326 September", "Miyoshi Lake Canoe Course, Miyoshi"], ["Paddlesport - Canoe slalom", "29 September\u20132 October", "Yahagigawa Canoe Slalom Course, Toyota"], ["Combat sports - Jiu-jitsu", "1\u20133 October", "Aichi Prefectural Martial Arts Hall, Nagoya"], ["Combat sports - Kurash", "27\u201329 September", "Aichi Prefectural Martial Arts Hall, Nagoya"], ["Combat sports - Mixed Martial Arts", "20\u201322 September", "Nagoya City Inae Sports Center, Nagoya"], ["Cricket (T20)", "17 September\u20133 October", "Korogi Athletic Park, Nisshin"], ["Cycling - Road", "20\u201323 September", "Shinshiro Cycling Road Course, Shinshiro"], ["Cycling - Mountain Bike", "24\u201325 September", "Obata Ryokuchi Park, Nagoya/Owariasahi"], ["Cycling - BMX Racing", "28 September", "Nagoya Velodrome BMX Race Course, Nagoya"], ["Cycling - BMX Freestyle", "26\u201327 September", "Aichi Sky Expo, Tokoname"], ["Esports", "23 September\u20132 October", "Aichi Sky Expo, Tokoname"], ["Fencing", "22\u201327 September", "Aichi Sky Expo, Tokoname"], ["Golf", "30 September\u20133 October", "Kasugai Country Club East Course, Kasugai"], ["Gymnastics - Artistic", "21\u201325 September", "Nagoya City General Gymnasium [Rainbow Hall], Nagoya"], ["Gymnastics - Rhythmic", "1\u20133 October", "Nagoya City General Gymnasium [Rainbow Hall], Nagoya"], ["Gymnastics - Trampoline", "27 September", "Nagoya City General Gymnasium [Rainbow Hall], Nagoya"], ["Handball", "19\u201329 September", "Kasugai City Gymnasium, Kasugai, and ENTRIO, Inazawa"], ["Judo", "30 September\u20133 October", "Aichi International Arena, Nagoya"], ["Kabaddi", "21\u201326 September", "Tokai Citizen Gymnasium, Tokai"], ["Karate", "20\u201323 September", "Toyohashi Gymnasium, Toyohashi"], ["Modern Pentathlon", "16\u201320 September", "Anjo Sports Park, Anjo"], ["Padel", "28 September\u20133 October", "Nagoya City Higashi Sports Center, Nagoya"], ["Rowing", "20\u201324 September", "Nagaragawa International Regatta Course, Aisai"], ["Rugby sevens", "1\u20133 October", "Nagoya City Mizuho Park Rugby Field, Nagoya"], ["Sailing", "26 September\u20133 October", "Kaiyoh Yacht Harbor, Gamagori"], ["Sepaktakraw", "20 September\u20133 October", "Nagoya City Mizuho Park Gymnasium, Nagoya"], ["Shooting", "20 September\u20131 October", "Aichi Prefectural General Shooting Gallery, Toyota"], ["Skateboarding", "24\u201327 September", "Aichi Sky Expo, Tokoname"], ["Climbing", "29 September\u20133 October", "Nagoya International Exhibition Hall [Portmesse Nagoya], Nagoya"], ["Squash", "23 September\u20132 October", "Nagoya Kinjo-Futo Arena, Nagoya"], ["Surfing", "25\u201328 September", "Pacific Long Beach, Tahara"], ["Table tennis", "20\u201328 September", "Sky Hall Toyota, Toyota"], ["Taekwondo", "1\u20133 October", "Toyohashi Gymnasium, Toyohashi"], ["Tennis - Tennis", "27 September\u20133 October", "Nagoya City Higashiyama Park Tennis Center, Nagoya"], ["Tennis - Soft Tennis", "18\u201323 September", "Nagoya City Higashiyama Park Tennis Center, Nagoya"], ["Teqball", "17\u201320 September", "Nagoya City Higashi Sports Center, Nagoya"], ["Triathlon", "20\u201321 September", "Gamagori City Triathlon Venue, Gamagori"], ["Volleyball - Volleyball", "16\u201322 September and 27 September\u20133 October", "Okazaki Chuo Sogo Park Gymnasium, Okazaki, and Park Arena Komaki, Komaki"], ["Volleyball - Beach Volleyball", "20 September\u20133 October", "Hekinan Ryokuchi Beach Court, Hekinan"], ["Weightlifting", "23\u201329 September", "Nagoya City Trade and Industry Center, Nagoya"], ["Wrestling", "30 September\u20133 October", "Nagoya City Inae Sports Center, Nagoya"], ["Wushu", "20\u201324 September", "Aichi Prefectural Martial Arts Hall, Nagoya"], ["Aquatics - Swimming", "20\u201325 September", "Tokyo Aquatics Centre, Tokyo"], ["Aquatics - Diving", "26\u201330 September", "Tokyo Aquatics Centre, Tokyo"], ["Equestrian", "21 September\u20134 October", "Equestrian Park, Tokyo"], ["Aquatics - Artistic Swimming", "26\u201328 September", "\u201CToBiO\u201D Furuhashi Hironoshin Memorial Hamamatsu Swimming Center, Hamamatsu"], ["Cycling - Track", "29 September\u20132 October", "Izu Velodrome, Izu"], ["Hockey", "18 September\u20133 October", "Gifu Prefectural Green Stadium, Gifu"], ["Football", "14 September\u20133 October", "seven different stadiums"]];
+var SZ_ASIAN_TALLY = [["1", "CHN", "People's Republic of China", "151", "67", "59", "277"], ["2", "JPN", "Japan", "50", "77", "73", "200"], ["3", "KOR", "Republic of Korea", "24", "30", "49", "103"], ["4", "UZB", "Uzbekistan", "16", "19", "19", "54"], ["5", "THA", "Thailand", "12", "10", "12", "34"], ["6", "IRI", "Islamic Republic of Iran", "11", "16", "12", "39"], ["7", "BRN", "Bahrain", "11", "5", "5", "21"], ["8", "IND", "India", "10", "21", "29", "60"], ["9", "KAZ", "Kazakhstan", "9", "16", "31", "56"], ["10", "PRK", "Democratic People's Republic of Korea", "7", "6", "7", "20"], ["11", "MAS", "Malaysia", "6", "5", "12", "23"], ["12", "HKG", "Hong Kong, China", "5", "12", "18", "35"], ["13", "INA", "Indonesia", "4", "7", "20", "31"], ["14", "KUW", "Kuwait", "4", "1", "4", "9"], ["15", "TPE", "Chinese Taipei", "3", "10", "26", "39"], ["16", "QAT", "Qatar", "3", "6", "4", "13"], ["17", "PHI", "Philippines", "3", "3", "12", "18"], ["18", "SGP", "Singapore", "2", "6", "3", "11"], ["19", "TJK", "Tajikistan", "2", "3", "5", "10"], ["20", "VIE", "Vietnam", "2", "1", "18", "21"], ["21", "MAC", "Macao, China", "1", "4", "1", "6"], ["22", "JOR", "Jordan", "1", "1", "2", "4"], ["23", "MYA", "Myanmar", "1", "1", "1", "3"], ["= 24", "SRI", "Sri Lanka", "1", "1", "0", "2"], ["= 24", "UAE", "United Arab Emirates", "1", "1", "0", "2"], ["26", "MGL", "Mongolia", "1", "0", "4", "5"], ["27", "KGZ", "Kyrgyzstan", "0", "2", "6", "8"], ["28", "KSA", "Saudi Arabia", "0", "2", "5", "7"], ["29", "IRQ", "Iraq", "0", "2", "2", "4"], ["30", "TKM", "Turkmenistan", "0", "2", "0", "2"], ["31", "AFG", "Afghanistan", "0", "1", "2", "3"], ["= 32", "LBN", "Lebanon", "0", "1", "1", "2"], ["= 32", "OMA", "Oman", "0", "1", "1", "2"], ["34", "PAK", "Pakistan", "0", "0", "5", "5"], ["35", "CAM", "Cambodia", "0", "0", "4", "4"], ["36", "NEP", "Nepal", "0", "0", "2", "2"], ["= 37", "BAN", "Bangladesh", "0", "0", "1", "1"], ["= 37", "BRU", "Brunei Darussalam", "0", "0", "1", "1"], ["= 37", "LAO", "Lao People's Democratic Republic", "0", "0", "1", "1"], ["= 37", "SYR", "Syrian Arab Republic", "0", "0", "1", "1"]];
+function szAsianTally() {
+  return '<section><h2>Official medal standings</h2><p>Snapshot checked September 30, 2026 at 11:02 PM IST. India: <strong>10 gold, 21 silver, 29 bronze, 60 total; rank 8.</strong> This table is a checked snapshot, not an automatic live feed. Rankings and counts can change.</p><p><a href="https://results.asiangames2026.org/#/medals">Check the organising committee&#39;s current medal table</a></p><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:520px"><thead><tr><th>Rank</th><th>Country / territory</th><th>Gold</th><th>Silver</th><th>Bronze</th><th>Total</th></tr></thead><tbody>' + SZ_ASIAN_TALLY.map((r) => "<tr" + (r[1] === "IND" ? ' style="background:#193c2c"' : "") + ">" + [r[0], r[2], ...r.slice(3)].map((c) => '<td style="padding:12px 8px;border-bottom:1px solid #2b3544">' + szBlogEsc(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table></div></section>";
+}
+__name(szAsianTally, "szAsianTally");
+__name2(szAsianTally, "szAsianTally");
+var SZ_ASIAN_MEDALS = [["Archery", "Women's compound team", "Gold", "Jyothi Surekha Vennam, Prithika Pradeep, Chikitha Taniparthi", "238-234 vs China", "September 30"], ["Archery", "Compound mixed team", "Gold", "Chikitha Taniparthi, Sahil Jadhav", "157-157; shoot-off 20-19 vs South Korea", "September 30"], ["Archery", "Men's compound team", "Gold", "Sahil Jadhav, Ganesh Mani Ratnam Thirumuru, Kushal Dalal", "238-237 vs China", "September 30"], ["Shooting", "Trap mixed team", "Gold", "Neeru Dhanda, Kynan Chenai", "34 targets; Qatar silver on 32", "September 30"], ["Athletics", "Women's 4x400m relay", "Gold", "Kiran Pahal, Poovamma Machettira, Prachi Choudhary, Vithya Ramraj", "3:29.69", "September 29"], ["Athletics", "Men's 4x400m relay", "Bronze", "Dharmveer Choudhary, Manu Thekkinalil, Jay Kumar, Vishal Thennarasu Kayalvizhi", "3:01.61", "September 29"]];
+function szAsianInfo(kind) {
+  const schedule = kind === "schedule";
+  const title = schedule ? "Asian Games 2026 Sports & Schedule" : "Asian Games 2026 Medal Table & India Results";
+  const desc = schedule ? "Sport-by-sport Asian Games 2026 dates and venues, based on the official Olympics.com schedule." : "Asian Games 2026 official medal-table snapshot and verified India event results. Gold, silver, bronze totals and source links.";
+  const url = "https://scorezaap.tech/asian-games/" + kind;
+  let body = schedule ? '<p>Competition dates below are local calendar dates in Japan. Source schedule: correct as of August 28, 2026, subject to changes. These are sport windows, not individual fixture times. Dates were checked on September 30.</p><p><a href="https://www.olympics.com/en/news/asian-games-2026-sports-schedule-la28-watch-live">Check the official schedule and updates</a></p><div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:600px"><thead><tr><th>Sport / discipline</th><th>Competition dates</th><th>Venue</th></tr></thead><tbody>' + SZ_ASIAN_SCHEDULE.map((r) => "<tr>" + r.map((c) => '<td style="padding:12px 10px;border-bottom:1px solid #2b3544;line-height:1.5">' + szBlogEsc(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table></div>" : szAsianTally() + '<h2>Selected India medal results</h2><p>Checked September 30, 2026. These are selected confirmed India medal events, not the full medal tally or all countries. Team medals count as one event medal, not one medal per athlete.</p><p><a href="https://www.olympics.com/en/news/20th-asian-games-aichi-nagoya-2026-medal-table-live-updates">Official country medal standings &#8594;</a></p><div class="bloggrid">' + SZ_ASIAN_MEDALS.map((r) => '<section class="postcard"><div class="eyebrow">' + szBlogEsc(r[0]) + " \xB7 " + szBlogEsc(r[2]) + "</div><h2>" + szBlogEsc(r[1]) + "</h2><p>" + szBlogEsc(r[3]) + "</p><p>" + szBlogEsc(r[4]) + "</p><p>" + szBlogEsc(r[5]) + ", 2026</p></section>").join("") + '</div><aside><h2>Official result sources</h2><ul><li><a href="https://www.olympics.com/en/news/asian-games-2026-archery-compound-india-gold-la-2028-olympics-quota">Compound archery team finals</a></li><li><a href="https://www.olympics.com/en/news/asian-games-2026-shooting-trap-mixed-team-gold-medal-report">Trap mixed team final</a></li><li><a href="https://www.olympics.com/en/news/asian-games-2026-athletics-india-women-4x400m-relay-gold-results">Athletics relay results</a></li></ul></aside>';
+  let page = szNewsPage("__asian__");
+  const start = page.indexOf('<section class="hero">'), end = page.lastIndexOf("</main>");
+  page = page.slice(0, start) + '<section class="hero"><div class="eyebrow">ASIAN GAMES</div><h1>' + title + "</h1><p>" + desc + "</p></section>" + body + page.slice(end);
+  page = page.replace(/<title>[\s\S]*?<\/title>/, "<title>" + title + " - ScoreZaap</title>").replace(/<meta name="description" content="[^"]*">/, '<meta name="description" content="' + desc + '">').replace(/<link rel="canonical" href="[^"]*">/, '<link rel="canonical" href="' + url + '">').replace(/<meta property="og:title" content="[^"]*">/, '<meta property="og:title" content="' + title + '">').replace(/<meta property="og:description" content="[^"]*">/, '<meta property="og:description" content="' + desc + '">').replace(/<meta property="og:url" content="[^"]*">/, '<meta property="og:url" content="' + url + '">').replace(/<script type="application\/ld\+json">[\s\S]*?<\/script>/g, "");
+  return page.replace("</head>", szBlogLd({ "@context": "https://schema.org", "@type": "CollectionPage", name: title, description: desc, url, about: { "@type": "SportsEvent", name: "Asian Games 2026", startDate: "2026-09-19", endDate: "2026-10-04", eventStatus: "https://schema.org/EventScheduled", location: { "@type": "Place", name: "Aichi-Nagoya, Japan", address: "Aichi Prefecture and Nagoya, Japan" } } }) + "</head>");
+}
+__name(szAsianInfo, "szAsianInfo");
+__name2(szAsianInfo, "szAsianInfo");
+function szAsianPosts() {
+  return szNewsSorted().filter((p) => p.slug.includes("asian-games"));
+}
+__name(szAsianPosts, "szAsianPosts");
+__name2(szAsianPosts, "szAsianPosts");
+function szAsianFeature(compact = false) {
+  const items = szAsianPosts().slice(0, compact ? 2 : 3);
+  return '<section aria-label="Featured Asian Games news" style="margin:20px 0 28px;padding:24px;border:1px solid #91d734;border-radius:18px;background:linear-gradient(125deg,#143326,#0b1320);color:#edf5f0"><div style="font-size:12px;letter-spacing:2px;color:#b5f14d">FEATURED COVERAGE</div><h2 style="font-size:28px;line-height:1.2;margin:10px 0">Asian Games 2026</h2><p style="color:#b7c7bf;font-size:15px;line-height:1.6">India medals, cricket and more. Original news checked against official sources.</p><ul style="padding-left:19px;margin:15px 0">' + items.map((p) => '<li style="margin:10px 0;line-height:1.5"><a style="color:#fff;text-decoration:none;font-weight:600" href="/news/' + p.slug + '">' + szBlogEsc(p.title) + "</a></li>").join("") + '</ul><a href="/asian-games" style="display:inline-block;color:#b5f14d;font-weight:700;text-decoration:none;padding:8px 0">All Asian Games news &#8594;</a><div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px"><a style="color:#b5f14d" href="/asian-games/medals">Medals &amp; results</a><a style="color:#b5f14d" href="/asian-games/schedule">Sports &amp; schedule</a></div></section>';
+}
+__name(szAsianFeature, "szAsianFeature");
+__name2(szAsianFeature, "szAsianFeature");
+function szNewsPage(slug) {
+  const asian = slug === "__asian__";
+  if (asian) slug = "";
+  const list = asian ? szAsianPosts() : szNewsSorted();
+  const p = SZ_NEWS_POSTS.find((x) => x.slug === slug);
+  if (slug && !p) return null;
+  const title = p ? p.title + " - ScoreZaap News" : asian ? "Asian Games 2026 News: India Medals, Cricket & Results - ScoreZaap" : "Sports News: Original Reports & Updates - ScoreZaap";
+  const desc = p ? p.description : asian ? "Asian Games 2026 news: India medals, archery, athletics and cricket. Original ScoreZaap reports verified against official sources." : "Original ScoreZaap sports news summaries, verified against primary sources and linked for readers to check.";
+  const url = asian ? "https://scorezaap.tech/asian-games" : "https://scorezaap.tech/news" + (p ? "/" + p.slug : "");
+  const nav = '<nav class="blognav" aria-label="Main navigation"><a class="brand" href="/">Score<span>Zaap</span></a><a href="/">Live scores</a><a href="/blog">Blog</a><a href="/news" aria-current="page">News</a></nav>';
+  const asianGuides = '<section class="related"><h2>Asian Games sport guides</h2><div class="bloggrid">' + SZ_BLOG_POSTS.filter((p2) => p2.category === "Asian Games").map(szBlogCard).join("") + "</div></section>";
+  const asianNav = '<nav aria-label="Asian Games sections" style="display:flex;gap:14px;flex-wrap:wrap;margin:18px 0 24px"><a href="/asian-games">News</a><a href="/asian-games/medals">Medals &amp; results</a><a href="/asian-games/schedule">Sports &amp; schedule</a></nav>';
+  const content = p ? '<article class="article"><div class="crumbs"><a href="/">Home</a> / <a href="/news">News</a> / ' + szBlogEsc(p.category) + "</div><h1>" + szBlogEsc(p.title) + '</h1><p class="dek">' + szBlogEsc(desc) + '</p><div class="meta">By ScoreZaap \xB7 <time datetime="' + p.published + '">' + szBlogEsc(szNewsDate(p)) + "</time> \xB7 Original sourced summary</div>" + szNewsFigure(p) + p.body + "<aside><h2>Primary source</h2><p>Facts checked against the report below. This is original summary writing, not firsthand reporting. Match information and future schedules can change after publication.</p><ul>" + p.sources.map(([u, n]) => '<li><a href="' + szBlogEsc(u) + '" rel="noopener">' + szBlogEsc(n) + "</a></li>").join("") + '</ul><p><a href="/contact">Report a correction</a></p></aside><p><a href="' + szNewsSportLink(p) + '">Browse ' + szBlogEsc(p.category) + (p.category === "Asian Games" ? " news" : " scores") + ' &#8594;</a></p></article><section class="related"><h2>More news</h2><div class="bloggrid">' + szNewsSorted().filter((x) => x !== p).slice(0, 6).map(szNewsCard).join("") + "</div></section>" : (asian ? asianNav : szAsianFeature()) + '<section class="hero"><div class="eyebrow">' + (asian ? "ASIAN GAMES 2026" : "SCOREZAAP NEWS") + "</div><h1>" + (asian ? "Asian Games.<br>India and beyond." : "The news.<br>In our own words.") + "</h1><p>" + (asian ? "Asian Games news, medals and cricket, with official sources you can check." : "Verified sports developments, written originally by ScoreZaap, with primary sources you can check.") + '</p><p style="font-size:14px">' + list.length + ' original news summaries \xB7 Updated in checked batches, not an automated wire</p></section><section class="bloggrid" aria-label="News articles">' + list.map(szNewsCard).join("") + "</section>" + (asian ? asianGuides : "") + '<section class="editorial"><h2>Our news standard</h2><p>We verify real events, write original summaries, credit primary sources and separate completed facts from a changing live match. We do not copy publisher prose, invent quotations or claim firsthand reporting. Each article records its publication date.</p><p>For changing scores, use <a href="/">Live scores</a>. For explanations, read <a href="/blog">the Blog</a>. <a href="/contact">Send a correction</a> if a fact needs checking.</p></section>';
+  const ld = p ? { "@context": "https://schema.org", "@type": "NewsArticle", headline: p.title, description: desc, datePublished: p.published, dateModified: p.modified || p.published, author: { "@type": "Organization", name: "ScoreZaap", url: "https://scorezaap.tech/about" }, publisher: { "@type": "Organization", name: "ScoreZaap", url: "https://scorezaap.tech/" }, url, mainEntityOfPage: url, articleSection: p.category, inLanguage: "en", ...SZ_NEWS_IMAGES[p.slug] ? { image: { "@type": "ImageObject", url: SZ_NEWS_IMAGES[p.slug].url, width: 1200, height: 630, caption: SZ_NEWS_IMAGES[p.slug].alt } } : {} } : { "@context": "https://schema.org", "@type": "CollectionPage", name: "ScoreZaap News", description: desc, url, mainEntity: { "@type": "ItemList", itemListElement: list.map((p2, i) => ({ "@type": "ListItem", position: i + 1, name: p2.title, url: "https://scorezaap.tech/news/" + p2.slug })) } };
+  const crumbs = { "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, name: "Home", item: "https://scorezaap.tech/" }, { "@type": "ListItem", position: 2, name: "News", item: "https://scorezaap.tech/news" }, ...p ? [{ "@type": "ListItem", position: 3, name: p.title, item: url }] : []] };
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + szBlogEsc(title) + '</title><meta name="description" content="' + szBlogEsc(desc) + '"><meta name="keywords" content="' + szBlogEsc(p ? p.title + ", " + p.category + " news, ScoreZaap sports news" : asian ? "Asian Games 2026 news, India Asian Games medals, Asian Games cricket, archery, athletics, ScoreZaap" : "sports news, cricket news, football news, Asian Games 2026, ScoreZaap") + '"><link rel="canonical" href="' + url + '"><meta property="og:type" content="' + (p ? "article" : "website") + '"><meta property="og:site_name" content="ScoreZaap"><meta property="og:title" content="' + szBlogEsc(title) + '"><meta property="og:description" content="' + szBlogEsc(desc) + '"><meta property="og:url" content="' + url + '"><meta property="og:image" content="' + (p && SZ_NEWS_IMAGES[p.slug] ? SZ_NEWS_IMAGES[p.slug].url : "https://scorezaap.tech/icon-512.png") + '">' + (p && SZ_NEWS_IMAGES[p.slug] ? '<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="' + szBlogEsc(SZ_NEWS_IMAGES[p.slug].alt) + '"><meta name="twitter:image" content="' + SZ_NEWS_IMAGES[p.slug].url + '">' : "") + '<meta name="twitter:card" content="summary"><link rel="icon" href="/icon-192.png"><style>' + SZ_BLOG_CSS + "</style>" + szBlogLd(ld) + szBlogLd(crumbs) + '</head><body><main class="blogwrap">' + nav + content + "</main></body></html>";
+}
+__name(szNewsPage, "szNewsPage");
+__name2(szNewsPage, "szNewsPage");
+var SZ_CELEBRATION_JS = "(function(){\n'use strict';\nvar states=new Map(),hideTimer,queue=[],busy=false;\ntry{localStorage.removeItem('szCelebrations')}catch(e){}\nfunction number(x){return typeof x==='number'&&Number.isFinite(x)?x:null}\nfunction crosses(a,b,step){return a!=null&&b!=null&&b>=a&&Math.floor(b/step)>Math.floor(a/step)}\nfunction pair(s){var m=String(s||'').match(/(?:^|\\s)(\\d+)\\s*-\\s*(\\d+)(?:\\s|$)/);if(!m)return null;return [+m[1],+m[2]]}\nfunction resultWinner(text){var m=String(text||'').match(/^(.+?)\\s+(?:has\\s+)?won(?:\\s|$)/i);return m?m[1]:null}\nfunction compare(old,cur){\n var out=[];if(!old||!old.live||!(cur.live||cur.finished))return out;\n function add(t){out.push(t)}\n if(cur.sport==='cricket'){\n  (cur.innings||[]).forEach(function(i){var p=(old.innings||[]).find(function(x){return x.key===i.key});if(!p||i.r<p.r||i.w<p.w)return;\n   if(i.w>p.w)add('WICKET \xB7 '+i.team);\n   if(crosses(p.r,i.r,100))add(i.team+' \xB7 '+Math.floor(i.r/100)*100+' runs');\n   (i.bats||[]).forEach(function(b){var a=(p.bats||[]).find(function(x){return x.id===b.id});if(!a||b.r<a.r||b.f<a.f||b.s<a.s)return;\n    if(b.s>a.s)add('SIX \xB7 '+b.name+(b.s-a.s>1?' \xD7'+(b.s-a.s):''));\n    if(b.f>a.f)add('FOUR \xB7 '+b.name+(b.f-a.f>1?' \xD7'+(b.f-a.f):''));\n    if(crosses(a.r,b.r,50))add(b.name+' \xB7 '+Math.floor(b.r/50)*50+' runs');\n   });\n  });\n }else if(['football','nba','mlb','nhl'].includes(cur.sport)&&old.pair&&cur.pair){\n  if(cur.pair.some(function(v,i){return v<old.pair[i]}))return [];\n  cur.pair.forEach(function(v,i){var delta=v-old.pair[i];if(delta<=0)return;var team=cur.teams[i]||'Team';\n   if(cur.sport==='football'||cur.sport==='nhl')add('GOAL \xB7 '+team+(delta>1?' \xB7 '+delta+' goals since update':''));\n   else if(cur.sport==='mlb')add(team+' \xB7 '+delta+' run'+(delta===1?'':'s')+' added');\n   else {add(team+' \xB7 +'+delta+' points');if(crosses(old.pair[i],v,50))add(team+' \xB7 '+Math.floor(v/50)*50+' points')}\n  });\n }\n if(cur.finished&&!old.finished){var winner=cur.winner;if(!winner&&cur.pair&&cur.pair[0]!==cur.pair[1]&&['football','nba','mlb','nhl'].includes(cur.sport))winner=cur.teams[cur.pair[0]>cur.pair[1]?0:1];add(winner?'WIN \xB7 '+winner:cur.sport==='f1'?'RACE COMPLETE':'MATCH COMPLETE')}\n return out;\n}\nfunction accept(key,cur,now){\n now=now||Date.now();var old=states.get(key);var eligible=cur&&cur.fresh&&now-cur.at>=-5000&&now-cur.at<=30000;\n if(document.hidden||!eligible){states.delete(key);return []}\n if(old&&now-old.at<=30000){var p=old.cur;var regression=p.pair&&cur.pair&&cur.pair.some(function(v,i){return v<p.pair[i]});(cur.innings||[]).forEach(function(i){var a=(p.innings||[]).find(function(x){return x.key===i.key});if(!a)return;if(i.r<a.r||i.w<a.w)regression=true;(i.bats||[]).forEach(function(b){var ab=(a.bats||[]).find(function(x){return x.id===b.id});if(ab&&(b.r<ab.r||b.f<ab.f||b.s<ab.s))regression=true})});if(regression){states.set(key,{cur:p,at:now});return []}}\n states.set(key,{cur:cur,at:now});if(!old||now-old.at>30000)return [];\n return compare(old.cur,cur);\n}\nfunction showNext(){\n if(busy||!queue.length||document.hidden)return;busy=true;var e=queue.shift();\n var box=document.getElementById('szCelebrate');if(!box){box=document.createElement('div');box.id='szCelebrate';box.setAttribute('role','status');box.setAttribute('aria-live','polite');var strong=document.createElement('strong');strong.className='sz-event';box.appendChild(strong);var sub=document.createElement('small');sub.textContent='ScoreZaap \xB7 latest score update';box.appendChild(sub);var close=document.createElement('button');close.textContent='\xD7';close.setAttribute('aria-label','Dismiss celebration');close.onclick=function(){finish()};box.appendChild(close);document.body.appendChild(box)}\n box.querySelector('.sz-event').textContent=e;box.classList.remove('sz-on');void box.offsetWidth;box.classList.add('sz-on');\n clearTimeout(hideTimer);hideTimer=setTimeout(finish,3200);\n}\nfunction finish(){var b=document.getElementById('szCelebrate');if(b)b.classList.remove('sz-on');clearTimeout(hideTimer);busy=false;setTimeout(showNext,120)}\nfunction emit(events){queue=queue.concat(events.slice(0,4)).slice(-6);showNext()}\nfunction scoreSnapshot(m){var ins=(m.scores||[]).map(function(s,i){var z=String(s.value||'').match(/^(\\d+)\\/(\\d+)/);return z?{key:String(s.inning||i),team:s.inning||'Team',r:+z[1],w:+z[2],bats:[]}:null}).filter(Boolean);return {sport:m.sport,live:m.status==='live',finished:m.status==='finished',fresh:!!m.celebrationVerifiedAt,at:m.celebrationVerifiedAt,innings:m.celebrationInnings||ins,winner:m.celebrationWinner||resultWinner(m.statusText),pair:pair(m.scores&&m.scores[0]&&m.scores[0].value),teams:[m.home&&m.home.short,m.away&&m.away.short]}}\nfunction detailSnapshot(sport,j){var d=j.detail||{},sc=j.scorecard||{};return {sport:sport,live:sport==='cricket'?!!d.started&&!d.ended:d.state==='live'||d.status==='IN_PLAY',finished:sport==='cricket'?!!d.ended:d.state==='finished'||d.status==='FINISHED',fresh:sport==='cricket'?!!sc.celebrationVerifiedAt:!!d.celebrationVerifiedAt,at:sport==='cricket'?sc.celebrationVerifiedAt:d.celebrationVerifiedAt,winner:d.celebrationWinner||resultWinner(d.status),innings:(sc.innings||[]).map(function(i,n){return {key:i.team+':'+n,team:i.team,r:number(i.runs),w:number(i.wkts),bats:(i.batsmen||[]).map(function(b){return {id:b.id||b.name,name:b.name,r:number(b.r),f:number(b.f),s:number(b.s)}})}}),pair:pair(d.celebrationVerifiedAt&&d.scores&&d.scores[0]?d.scores[0].value:d.fullTime||d.bigScore||d.scores&&d.scores[0]&&d.scores[0].value),teams:[typeof d.home==='string'?d.home:d.home&&d.home.short,typeof d.away==='string'?d.away:d.away&&d.away.short]}}\nwindow.szCelebrate={home:function(list){list.forEach(function(m){emit(accept(m.sport+':'+m.id,scoreSnapshot(m)))})},detail:function(sport,id,j){emit(accept(sport+':'+id,detailSnapshot(sport,j)))},compare:compare,accept:accept,scoreSnapshot:scoreSnapshot,detailSnapshot:detailSnapshot};\ndocument.addEventListener('visibilitychange',function(){states.clear();queue=[];finish()});\n})();\n";
+var SZ_CELEBRATION_CSS = "#szCelebrate{box-sizing:border-box;position:fixed;z-index:110;top:calc(20px + env(safe-area-inset-top));left:50%;transform:translate(-50%,-16px) scale(.95);opacity:0;pointer-events:none;width:min(440px,calc(100% - 28px));padding:25px 42px 22px 24px;background:linear-gradient(135deg,#163f30,#122c48);border:1px solid #a3e635;border-radius:20px;color:#e8eef8;box-shadow:0 12px 50px #0008;transition:transform .3s,opacity .3s;font-family:Inter,system-ui,sans-serif;text-align:center}#szCelebrate.sz-on{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto;animation:szPulse .8s ease-out}#szCelebrate strong{display:block;font-size:24px;line-height:1.3;color:#b9f55a;overflow-wrap:anywhere}#szCelebrate small{display:block;margin-top:9px;color:#b9c6d9;font-size:12px}#szCelebrate button{position:absolute;right:12px;top:8px;border:0;background:transparent;color:#e8eef8;font-size:25px;cursor:pointer}@keyframes szPulse{0%{box-shadow:0 0 0 0 #a3e63555}100%{box-shadow:0 0 0 26px #a3e63500}}@media(prefers-reduced-motion:reduce){#szCelebrate,#szCelebrate.sz-on{transition:none;animation:none;transform:translate(-50%,0)}}\n";
+var SZ_NEWS_IMAGE_GILL_DOUBLE = "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";
+var SZ_NEWS_IMAGE_ROHIT_HUNDRED = "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";
+function szAuditEsc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+__name(szAuditEsc, "szAuditEsc");
+async function szAuditRead(env, key, fallback) {
+  try {
+    return env.SPORTS_KV ? await env.SPORTS_KV.get(key, "json") || fallback : fallback;
+  } catch {
+    return fallback;
+  }
+}
+__name(szAuditRead, "szAuditRead");
+function szAuditRank(data) {
+  if (!data || !Array.isArray(data.rows)) return data;
+  if (data.format !== "odi" || data.type !== "batsmen" || data.updated !== "2026-09-30") return data;
+  return { ...data, sourceNote: "September 30 snapshot: Rohit's rating corrected to 719 against the dated ICC announcement. Other feed values are not independently confirmed.", sourceUrl: "https://www.icc-cricket.com/news/kohli-closes-in-on-top-spot-in-icc-odi-batter-rankings", rows: data.rows.map((r) => String(r.id) === "576" && Number(r.rating) === 753 ? { ...r, rating: 719 } : r) };
+}
+__name(szAuditRank, "szAuditRank");
+function szAuditCards(rows) {
+  return rows.slice(0, 60).map((m) => '<a class="mrow" href="/match/' + encodeURIComponent(m.sport || "cricket") + "/" + encodeURIComponent(String(m.id || "")) + '"><div class="mt1">' + szAuditEsc(m.title || (m.home?.name || "") + " vs " + (m.away?.name || "")) + '</div><div class="msc">' + szAuditEsc((m.scores || []).map((x) => x.value).join(" \xB7 ")) + '</div><div class="mm2">' + szAuditEsc(m.statusText || m.status || "") + (m.start ? " \xB7 " + szAuditEsc(m.start) + " (source time)" : "") + "</div></a>").join("");
+}
+__name(szAuditCards, "szAuditCards");
+async function szAuditSchedule(env, path) {
+  const [c, f] = await Promise.all([szAuditRead(env, "cricket", { matches: [] }), szAuditRead(env, "football", { matches: [] })]);
+  const rows = [...(c.matches || []).map((m) => ({ ...m, sport: "cricket" })), ...(f.matches || []).map((m) => ({ ...m, sport: "football" }))];
+  const archive = path === "/archives";
+  const chosen = rows.filter((m) => archive ? m.status === "finished" : m.status !== "finished").sort((a, b) => archive ? Date.parse(b.start || 0) - Date.parse(a.start || 0) : Date.parse(a.start || 0) - Date.parse(b.start || 0));
+  const h = '<section aria-label="' + (archive ? "Results" : "Fixtures") + '"><h1>' + (archive ? "Archives" : "Schedule") + "</h1><p>" + (archive ? "Recent cricket and football results" : "Upcoming fixtures and matches in progress") + '. This is the latest saved feed snapshot, not a guarantee of a live result. Times below use the source timestamp; the live view converts them to your local time.</p><p><a href="/schedule">Fixtures</a> \xB7 <a href="/archives">Results</a> \xB7 <a href="/blog/follow-live-scores-with-context">Read scores with context</a></p>' + (chosen.length ? szAuditCards(chosen) : '<p>No saved fixtures are available right now. <a href="/">Open live scores</a> or try again later.</p>') + "</section>";
+  return SCHED_PAGE.replace('<div id="app"><div class="skel"></div><div class="skel"></div></div>', '<div id="app"><div style="grid-column:1/-1">' + h + "</div></div>");
+}
+__name(szAuditSchedule, "szAuditSchedule");
+async function szAuditRankPage(env) {
+  const d = szAuditRank(await szAuditRead(env, "rank_odi_batsmen", null));
+  const note = '<p>Rankings are dated feed snapshots, not live points recalculated after every ball. Batting, bowling and all-rounder lists measure different performances. Use the format and category controls to compare like with like.</p><p><a href="/news/kohli-second-icc-odi-ranking-september-30">September 30 ranking report</a> \xB7 <a href="/sports/cricket">Cricket coverage</a></p>';
+  const rows = d?.rows?.length ? d.rows.slice(0, 100).map((r) => '<div class="row"><div class="rk">' + szAuditEsc(r.rank) + '</div><div class="nm">' + szAuditEsc(r.name) + "<small>" + szAuditEsc(r.country) + '</small></div><div class="rt">' + szAuditEsc(r.rating) + "</div></div>").join("") : "<p>No saved rankings are available. Please try again later.</p>";
+  return RANKINGS_PAGE.replace('<div class="upd" id="upd">Loading...</div>', '<div class="upd" id="upd">' + (d ? "Feed snapshot " + szAuditEsc(d.updated || "date unavailable") : "Snapshot unavailable") + "</div>" + note + (d?.sourceNote ? "<p>" + szAuditEsc(d.sourceNote) + ' <a href="' + d.sourceUrl + '">ICC source</a></p>' : "")).replace('<div id="rows"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>', '<div id="rows">' + rows + "</div>");
+}
+__name(szAuditRankPage, "szAuditRankPage");
+async function szAuditF1Page(env) {
+  const [st, list] = await Promise.all([szAuditRead(env, "ser_f1", null), szAuditRead(env, "espn_f1", { matches: [] })]);
+  const table = /* @__PURE__ */ __name((title, rows) => '<div class="tbl"><h2>' + title + "</h2><table><tr><th>Position</th><th>Name</th><th>Team</th><th>Wins</th><th>Points</th></tr>" + rows.slice(0, 100).map((r) => "<tr><td>" + szAuditEsc(r.pos) + "</td><td>" + szAuditEsc(r.name || r.team) + "</td><td>" + szAuditEsc(r.sub || "") + "</td><td>" + szAuditEsc(r.w ?? r.wins) + "</td><td>" + szAuditEsc(r.pts) + "</td></tr>").join("") + "</table></div>", "table");
+  const h = '<section><h1>Formula 1 season hub</h1><p>Saved championship standings and race fixtures. Points reflect the data provider snapshot and may be delayed or corrected. Race-session fixtures and the Grand Prix race date are different events.</p><p><a href="/blog/f1-gap-interval-and-fastest-lap">Understand F1 timing</a> \xB7 <a href="/sports/f1">F1 scores and news</a></p>' + (st ? table("Drivers championship", st.drv || []) + table("Constructors championship", st.con || []) : "<p>Standings are temporarily unavailable. The live view will retry.</p>") + "<h2>Race fixtures and results</h2>" + szAuditCards((list.matches || []).map((m) => ({ ...m, sport: "f1" }))) + "</section>";
+  return SERIES_PAGE.replace('<div id="app"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>', '<div id="app"><div style="grid-column:1/-1">' + h + "</div></div>");
+}
+__name(szAuditF1Page, "szAuditF1Page");
+var SZ_COMMONS_API = "https://commons.wikimedia.org/w/api.php";
+var SZ_SPORT_RULES = [
+  ["cricket", /\b(cricket|ipl|bcci|icc|test match|odi|t20|wicket|batter|batsman|bowler|innings|ranji|irani cup|asia cup)\b/i, "cricket match"],
+  ["tennis", /\b(tennis|atp|wta|grand slam|wimbledon|us open|roland garros|australian open|davis cup)\b/i, "tennis match"],
+  ["f1", /\b(formula 1|formula one|f1|grand prix|verstappen|hamilton|leclerc|norris)\b/i, "Formula One race car"],
+  ["basketball", /\b(nba|basketball|wnba|lakers|celtics|warriors)\b/i, "basketball game"],
+  ["baseball", /\b(mlb|baseball|dodgers|yankees|world series|ohtani|post-?season|home run)\b/i, "baseball game"],
+  ["hockey", /\b(nhl|ice hockey|stanley cup)\b/i, "ice hockey game"],
+  ["nfl", /\b(nfl|american football|quarterback|touchdown|vikings|dolphins|super bowl)\b/i, "American football game"],
+  ["hockey-field", /\b(hockey)\b/i, "field hockey match"],
+  ["football", /\b(football|soccer|premier league|la liga|serie a|bundesliga|champions league|fifa|uefa|goal|striker|man city|manchester|chelsea|arsenal|liverpool|barcelona|real madrid)\b/i, "association football match"],
+  ["boxing", /\b(boxing|boxer|bout)\b/i, "boxing match"],
+  ["wrestling", /\b(wrestl)/i, "wrestling match"],
+  ["archery", /\b(archery|archer|compound|recurve)\b/i, "archery competition"],
+  ["badminton", /\b(badminton|bwf|shuttler)\b/i, "badminton match"],
+  ["athletics", /\b(athletics|sprint|marathon|javelin|long jump|track and field)\b/i, "athletics competition"],
+  ["golf", /\b(golf|pga|masters)\b/i, "golf tournament"],
+  ["rugby", /\b(rugby)\b/i, "rugby match"],
+  ["kabaddi", /\b(kabaddi)\b/i, "kabaddi match"]
+];
+function szSport(t) {
+  const hits = SZ_SPORT_RULES.filter(([k, re]) => re.test(t));
+  let keys = hits.map((h2) => h2[0]);
+  if (keys.includes("nfl")) keys = keys.filter((k) => k !== "football");
+  if (keys.includes("hockey")) keys = keys.filter((k) => k !== "hockey-field");
+  if (keys.length !== 1) return null;
+  const h = hits.find((x) => x[0] === keys[0]);
+  return { key: h[0], query: h[2] };
+}
+__name(szSport, "szSport");
+function szSingles(text) {
+  const out = [];
+  const words = text.split(/\s+/);
+  words.forEach((w, i) => {
+    const c = w.replace(/[^A-Za-z'’-]/g, "").replace(/['’]s$/, "");
+    if (i > 0 && /^[A-Z][a-z]{4,}$/.test(c) && !SZ_NAME_STOP.has(c) && !out.includes(c)) out.push(c);
+  });
+  return out.slice(0, 2);
+}
+__name(szSingles, "szSingles");
+var SZ_NAME_STOP = /* @__PURE__ */ new Set(["The", "A", "An", "In", "On", "At", "For", "To", "Of", "And", "But", "With", "After", "Before", "How", "Why", "What", "When", "Who", "As", "By", "From", "Over", "Is", "Are", "Has", "Have", "Will", "Could", "Would", "New", "First", "Last", "Day", "Asian", "Games", "League", "Cup", "Premier", "Champions", "World", "Series", "Test", "Match", "Final", "Semi", "Round", "Group", "India", "Indian", "England", "Australia", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Man", "Three", "Two", "One", "Six", "Four", "Five", "Report", "Live", "Update", "Watch", "Video"]);
+function szCandidates(text) {
+  const out = [];
+  const re = /\b([A-Z][a-zA-Z'’.-]{2,}(?:\s+(?:de|van|von|al|bin|di|da|le|la|del)?\s*[A-Z][a-zA-Z'’.-]{2,}){1,2})\b/g;
+  let m;
+  while (m = re.exec(text)) {
+    const words = m[1].split(/\s+/).filter((w) => !/^(de|van|von|al|bin|di|da|le|la|del)$/i.test(w));
+    const clean = m[1].replace(/['’]s$/, "");
+    if (words.length < 2 || SZ_NAME_STOP.has(words[0])) continue;
+    if (words.some((w) => SZ_NAME_STOP.has(w) && words.length === 2)) continue;
+    if (!out.includes(clean)) out.push(clean);
+  }
+  return out.slice(0, 3);
+}
+__name(szCandidates, "szCandidates");
+var SZ_LICENCE_OK = /^(cc0|public domain|pd[- ]|cc[- ]by(-sa)?[- ][234]\.\d|cc[- ]by(-sa)?[- ]\d\.\d)/i;
+function szStrip(s) {
+  return String(s || "").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+__name(szStrip, "szStrip");
+function szVerifyCommons(p, must, any) {
+  const ii = p.imageinfo && p.imageinfo[0];
+  if (!ii) return null;
+  const x = ii.extmetadata || {};
+  const v = /* @__PURE__ */ __name((k) => szStrip(x[k] && x[k].value), "v");
+  const lic = v("LicenseShortName");
+  const artist = v("Artist").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  if (!SZ_LICENCE_OK.test(lic) || /\b(nc|nd)\b|non-?commercial|no-?deriv/i.test(lic)) return null;
+  if (!artist || artist.length > 120 || /unknown|anonymous|^n\/?a$|^\?$/i.test(artist)) return null;
+  if (!/^image\/(jpeg|png|webp)$/.test(ii.mime || "") || !ii.thumburl || (ii.width || 0) < 600 || !(ii.thumbwidth > 0) || !(ii.thumbheight > 0)) return null;
+  if (v("Restrictions") || /non-?free|fair use|copyrighted/i.test(v("UsageTerms") + " " + v("Categories"))) return null;
+  if (!/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(ii.thumburl) || !/^https:\/\/commons\.wikimedia\.org\//.test(ii.descriptionurl)) return null;
+  const licUrl = v("LicenseUrl");
+  const isCC = /^cc/i.test(lic);
+  if (isCC && !/^https:\/\/creativecommons\.org\//.test(licUrl)) return null;
+  const hay = (p.title + " " + v("ObjectName") + " " + v("ImageDescription") + " " + v("Categories")).toLowerCase();
+  if (must && !must.every((t) => hay.includes(t.toLowerCase()))) return null;
+  if (any && any.length && !any.some((t) => hay.includes(t.toLowerCase()))) return null;
+  return { url: ii.thumburl, w: ii.thumbwidth, h: ii.thumbheight, file: p.title, page: ii.descriptionurl, artist: artist.slice(0, 100), licence: lic, licenceUrl: isCC ? licUrl : "", desc: v("ImageDescription").slice(0, 140) };
+}
+__name(szVerifyCommons, "szVerifyCommons");
+async function szCommonsSearch(q, must, limit, any) {
+  const u = SZ_COMMONS_API + "?action=query&format=json&generator=search&gsrnamespace=6&gsrlimit=20&gsrsearch=" + encodeURIComponent(q + " filetype:bitmap") + "&prop=imageinfo&iiprop=url|extmetadata|mime|size&iiurlwidth=800&iiextmetadatafilter=LicenseShortName|LicenseUrl|Artist|ImageDescription|ObjectName|Categories|Restrictions|UsageTerms&origin=*";
+  const r = await fetch(u, { headers: { "User-Agent": "ScoreZaap/1.0 (https://scorezaap.tech; news photo credits)" } });
+  if (!r.ok) return [];
+  const d = await r.json();
+  const pages = Object.values(d.query?.pages || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
+  const out = [];
+  for (const p of pages) {
+    const v = szVerifyCommons(p, must, any);
+    if (v) out.push(v);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+__name(szCommonsSearch, "szCommonsSearch");
+var SZ_SUMMARY_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+function szWordRuns(a, b, n) {
+  const A = a.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean), B = " " + b.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean).join(" ") + " ";
+  for (let i = 0; i + n <= A.length; i++) if (B.includes(" " + A.slice(i, i + n).join(" ") + " ")) return true;
+  return false;
+}
+__name(szWordRuns, "szWordRuns");
+function szValidSummary(sum, src) {
+  if (!sum || sum.length < 40 || sum.length > 420) return false;
+  const sents = sum.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sents.length < 1 || sents.length > 4) return false;
+  if (/[<>{}\[\]]|https?:|\n/.test(sum)) return false;
+  if (szWordRuns(sum, src, 7)) return false;
+  const srcL = src.toLowerCase();
+  const nums = sum.match(/\d[\d.,:%-]*/g) || [];
+  if (nums.some((n) => !srcL.includes(n.replace(/[.,]$/, "")))) return false;
+  const caps = sum.replace(/(^|[.!?]\s+)\S+/g, "$1").match(/\b[A-Z][a-zA-Z'’-]{2,}\b/g) || [];
+  if (caps.some((c) => !srcL.includes(c.toLowerCase()))) return false;
+  return true;
+}
+__name(szValidSummary, "szValidSummary");
+async function szSummarize(env, n) {
+  const src = (n.title + ". " + (n.desc && n.desc.toLowerCase() !== n.title.toLowerCase() ? n.desc : "")).trim();
+  if (!env.AI) return "";
+  const sys = 'You write short neutral news summaries for a sports site. Use ONLY facts stated in the headline and snippet. Keep every concrete fact that appears there: who, what happened, numbers, scores, results, injuries, dates and teams. Restate the meaning exactly: never negate, soften or reverse it, and never add names, numbers, places, causes or opinions that are not given. Write 2 or 3 plain sentences in your own words; do not copy a phrase of more than six words in a row. Do not write vague filler such as "a player" when the headline names the person. If the snippet only repeats the headline, write 2 sentences that restate the headline in different words. Output the summary text only.';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await env.AI.run(SZ_SUMMARY_MODEL, { messages: [{ role: "system", content: sys }, { role: "user", content: "Headline: " + n.title + "\nPublisher snippet: " + (n.desc || "(none)") + "\nPublisher: " + n.source }], max_tokens: 160, temperature: attempt ? 0.1 : 0.3 });
+      const out = String(r?.response || "").replace(/^\s*(summary:?)\s*/i, "").trim();
+      if (szValidSummary(out, src)) return out;
+    } catch (e) {
+    }
+  }
+  return "";
+}
+__name(szSummarize, "szSummarize");
+async function szFindPhoto(n, sportCache) {
+  const text = n.title + " " + (n.desc || "");
+  const sp = szSport(text);
+  const sw = sp ? sp.query.split(" ")[0].toLowerCase() : "";
+  const sportWords = sp ? { nfl: ["football", "nfl"], football: ["football", "soccer"], f1: ["formula"], hockey: ["hockey"], "hockey-field": ["hockey"] }[sp.key] || [sw] : [];
+  let calls = 0;
+  for (const c of szCandidates(n.title)) {
+    if (calls++ >= 2) break;
+    const must = c.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+    const r = await szCommonsSearch(c, must, 1, sp ? sportWords : null);
+    if (r[0]) return { ...r[0], kind: "subject", label: c };
+  }
+  if (sp) for (const c of szSingles(n.title)) {
+    if (calls++ >= 3) break;
+    const r = await szCommonsSearch(c + " " + sp.query, [c.toLowerCase()], 1);
+    const ok = r.find((x) => sportWords.some((w) => (x.file + " " + x.desc).toLowerCase().includes(w)));
+    if (ok) return { ...ok, kind: "sport", label: sp.query };
+  }
+  if (sp) {
+    let list = sportCache[sp.key];
+    if (!list) {
+      list = await szCommonsSearch(sp.query, null, 8, sportWords);
+      sportCache[sp.key] = list;
+    }
+    if (list.length) {
+      let h = 0;
+      for (const ch of n.link) h = h * 31 + ch.charCodeAt(0) >>> 0;
+      return { ...list[h % list.length], kind: "sport", label: sp.query };
+    }
+  }
+  return null;
+}
+__name(szFindPhoto, "szFindPhoto");
+async function szOembed(link) {
+  try {
+    const u = new URL(link);
+    if (u.protocol !== "https:") return null;
+    const r = await fetch(link, { headers: { "User-Agent": "ScoreZaap/1.0", "Accept": "text/html" }, signal: AbortSignal.timeout(6e3) });
+    if (!r.ok) return null;
+    const html2 = (await r.text()).slice(0, 15e4);
+    const m = html2.match(/<link[^>]+type=["']application\/json\+oembed["'][^>]*>/i);
+    if (!m) return null;
+    const href = (m[0].match(/href=["']([^"']+)["']/i) || [])[1];
+    if (!href) return null;
+    const e = new URL(href.replace(/&amp;/g, "&"), link);
+    const reg = /* @__PURE__ */ __name((h2) => h2.split(".").slice(-2).join("."), "reg");
+    if (e.protocol !== "https:" || reg(e.hostname) !== reg(u.hostname)) return null;
+    const j = await (await fetch(e.href, { headers: { "User-Agent": "ScoreZaap/1.0" }, signal: AbortSignal.timeout(6e3) })).json();
+    const img = j.type === "photo" && j.url ? j.url : j.thumbnail_url;
+    if (!img || !/^https:\/\//.test(img) || !(j.provider_name || j.author_name)) return null;
+    const w = Number(j.type === "photo" ? j.width : j.thumbnail_width) || 0, h = Number(j.type === "photo" ? j.height : j.thumbnail_height) || 0;
+    return { url: img, w: w || 800, h: h || 450, artist: String(j.provider_name || j.author_name).slice(0, 100), licence: "", licenceUrl: "", file: "", page: link, kind: "oembed", label: "" };
+  } catch (e) {
+    return null;
+  }
+}
+__name(szOembed, "szOembed");
+async function szEnrichRun(env) {
+  try {
+    await szAutoSchema(env);
+    const feed = await szAutoGet(env, "headlines");
+    if (!feed?.items?.length) return;
+    const store = await szAutoGet(env, "enrich") || { items: {}, sports: {} };
+    const sports = store.sports || {};
+    const now = Date.now();
+    const sportCache = {};
+    for (const [k, v] of Object.entries(sports)) if (now - v.t < 24 * 36e5) sportCache[k] = v.list;
+    let done = 0;
+    const stats = { summaries: 0, photos: 0, errors: [] };
+    for (const n of feed.items) {
+      const sourceText = (n.title + ". " + (n.desc && n.desc.toLowerCase() !== n.title.toLowerCase() ? n.desc : "")).trim();
+      if (store.items[n.link] && store.items[n.link].v === 3 && szValidSummary(store.items[n.link].summary, sourceText)) continue;
+      if (done >= 2) break;
+      done++;
+      const e = { v: 3, t: now, summary: "", photo: null };
+      try {
+        e.summary = await szSummarize(env, n);
+      } catch (x) {
+        stats.errors.push("summary " + String(x.message).slice(0, 80));
+      }
+      try {
+        e.photo = await szOembed(n.link) || await szFindPhoto(n, sportCache);
+      } catch (x) {
+        stats.errors.push("photo " + String(x.message).slice(0, 80));
+      }
+      store.items[n.link] = e;
+    }
+    for (const [k, list] of Object.entries(sportCache)) sports[k] = { t: sports[k] && sportCache[k] === sports[k].list ? sports[k].t : now, list };
+    store.sports = sports;
+    const keep = new Set(feed.items.map((i) => i.link));
+    for (const k of Object.keys(store.items)) if (!keep.has(k)) delete store.items[k];
+    await szAutoPut(env, "enrich", store);
+    const h = await szAutoGet(env, "health") || {};
+    h.enrich_last = (/* @__PURE__ */ new Date()).toISOString();
+    h.enriched_items = Object.keys(store.items).length;
+    h.enriched_with_summary = Object.values(store.items).filter((x) => x.summary).length;
+    h.enriched_with_photo = Object.values(store.items).filter((x) => x.photo).length;
+    h.enrich_errors = stats.errors.slice(0, 3);
+    await szAutoPut(env, "health", h);
+  } catch (e) {
+    console.log("ScoreZaap enrich failed", String(e.message));
+  }
+}
+__name(szEnrichRun, "szEnrichRun");
+function szItemCredit(n, e) {
+  const p = e && e.photo;
+  let parts = [];
+  if (p) {
+    if (p.kind === "oembed") parts.push("Image: " + szBlogEsc(p.artist) + `, via the publisher's official embed data, from <a href="` + szBlogEsc(p.page) + '" rel="noopener nofollow">the original article</a>.');
+    else parts.push("Photo: " + szBlogEsc(p.artist) + ", " + (p.licenceUrl ? '<a href="' + szBlogEsc(p.licenceUrl) + '" rel="noopener nofollow license">' + szBlogEsc(p.licence) + "</a>" : szBlogEsc(p.licence)) + ', via <a href="' + szBlogEsc(p.page) + '" rel="noopener nofollow">Wikimedia Commons</a>. ' + (p.kind === "subject" ? "File photo of " + szBlogEsc(p.label) + ", not from this event." : "Illustrative " + szBlogEsc(p.label.replace(/ (match|game|competition|tournament|race car)$/, "")) + " photo, not from this event."));
+  }
+  if (e && e.summary) parts.push("Summary written automatically from the publisher headline and snippet.");
+  parts.push("Source: " + szBlogEsc(n.source) + ' \xB7 <a href="' + szBlogEsc(n.link) + '" rel="noopener nofollow">Read the publisher report</a>');
+  return parts.join(" ");
+}
+__name(szItemCredit, "szItemCredit");
+var SZ_AUTO_VERSION = "2026-10-03-v3";
+async function szAutoSchema(env) {
+  if (!env.DB) throw new Error("D1 unavailable");
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS sz_automation (id TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)").run();
+}
+__name(szAutoSchema, "szAutoSchema");
+async function szAutoGet(env, id) {
+  try {
+    const r = await env.DB.prepare("SELECT value FROM sz_automation WHERE id=?").bind(id).first();
+    return r ? JSON.parse(r.value) : null;
+  } catch {
+    return null;
+  }
+}
+__name(szAutoGet, "szAutoGet");
+async function szAutoPut(env, id, value) {
+  await env.DB.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind(id, JSON.stringify(value), (/* @__PURE__ */ new Date()).toISOString()).run();
+}
+__name(szAutoPut, "szAutoPut");
+function szAutoItems(items) {
+  const seen = /* @__PURE__ */ new Set();
+  const now = Date.now();
+  return (items || []).filter((n) => {
+    try {
+      const u = new URL(n.link);
+      const t = Date.parse(n.published);
+      const key = n.title.toLowerCase().replace(/\W+/g, " ");
+      if (u.protocol !== "https:" || u.username || u.password || !n.source || n.title.length < 8 || n.title.length > 400 || !Number.isFinite(t) || t > now + 3e5 || now - t > 7 * 864e5 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }).slice(0, 30).map((n) => ({ title: String(n.title).replace(/<[^>]*>/g, ""), link: n.link, source: String(n.source).replace(/<[^>]*>/g, ""), published: n.published, desc: String(n.desc || "").replace(/<[^>]*>/g, " ").trim().slice(0, 500) }));
+}
+__name(szAutoItems, "szAutoItems");
+
+async function szMark(env,s){try{await env.DB.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind("cron_mark",JSON.stringify({s,at:new Date().toISOString()}),new Date().toISOString()).run()}catch(e){}}
+async function szAutoRun(env) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  let h = { version: SZ_AUTO_VERSION, last_attempt: now, news_interval_minutes: 20, blog_interval: "daily, only with fresh data", errors: [] };
+  try {
+    let items0 = null;
+    try {
+      const rawNews = await fetchNews();
+      const items = szAutoItems(rawNews);
+      if (!items.length) throw new Error("No valid recent headlines");
+      await szAutoPut(env, "headlines", { items, checked: now });
+      items0 = items;
+    } catch (e) { h.errors.push("news: " + String(e.message).slice(0, 160)); }
+    const old = await szAutoGet(env, "health");
+    h = { ...old, ...h };
+    try {
+      const items = items0;
+      if (!items) throw new Error("headlines not refreshed");
+      h.news_last_success = now;
+      h.news_items = items.length;
+      h.news_newest = items[0].published;
+    } catch (e) {
+      h.errors.push("news: " + String(e.message).slice(0, 160));
+    }
+    try {
+      const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(/* @__PURE__ */ new Date());
+      const oldBook = await szAutoGet(env, "notebook");
+      if (!oldBook || oldBook.day !== day) {
+        const blocks = [];
+        let total = 0;
+        for (const [sport, key] of [["cricket", "cricket"], ["football", "football"], ["nba", "espn_nba"], ["mlb", "espn_mlb"], ["nhl", "espn_nhl"], ["tennis", "espn_tennis"], ["f1", "espn_f1"]]) {
+          const b = await readKV(env, key, { at: 0, matches: [] });
+          if (!b.at || Date.now() - Number(b.at) > 2 * 36e5 || Number(b.at) > Date.now() + 3e5) continue;
+          const rows = (b.matches || []).filter((m) => m.id && ["live", "finished", "upcoming"].includes(m.status) && m.start && Math.abs(Date.parse(m.start) - Date.now()) < 36 * 36e5).slice(0, 6);
+          if (!rows.length) continue;
+          total += rows.length;
+          blocks.push({ sport, checked: new Date(Number(b.at)).toISOString(), matches: rows.map((m) => ({ id: String(m.id), title: String(m.title || [m.home?.name || m.home, m.away?.name || m.away].filter(Boolean).join(" vs ")).slice(0, 250), status: m.status, start: m.start, score: (m.scores || []).map((s) => s.value).join(" | ") || [m.homeScore, m.awayScore].filter((v) => v != null).join(" - ") })) });
+        }
+        if (total < 3) throw new Error("No recent dated scoreboard snapshots; notebook retained");
+        await szAutoPut(env, "notebook", { day, published: now, blocks, total });
+        h.blog_last_success = now;
+        h.blog_matches = total;
+      }
+    } catch (e) {
+      h.errors.push("blog: " + String(e.message).slice(0, 160));
+    }
+    try {
+      const dailyPost = await szDailyPublish(env, Date.now());
+      h.daily_article_last_success = dailyPost.published_at;
+      h.daily_article_slug = dailyPost.slug;
+      h.daily_article_state = dailyPost.created ? "published" : "already_published_today";
+      try { h.daily_article_results = JSON.parse(dailyPost.results_json || "{}").results?.length || 0; } catch (e) { h.daily_article_results = 0; }
+    } catch (e) {
+      h.errors.push("daily blog: " + String(e.message || e).slice(0, 160));
+    }
+    try {
+      const matchRun = await szMatchRun(env, Date.now());
+      h.match_article_last_success = new Date().toISOString();
+      h.match_article_posts_created = matchRun.created;
+      h.match_article_sample_slug = matchRun.sampleSlug;
+      h.match_article_pending = matchRun.pending;
+      h.match_article_state = matchRun.initialized ? "baseline_initialized" : matchRun.pending ? "published_or_queued" : "checked";
+      h.match_article_stale_feeds = matchRun.staleFeeds;
+    } catch (e) {
+      h.errors.push("match blog: " + String(e.message || e).slice(0, 160));
+    }
+    if (h.news_newest && Date.now() - Date.parse(h.news_newest) > 48 * 36e5) h.errors.push("Latest publisher headline is over 48 hours old");
+    if (h.blog_last_success && Date.now() - Date.parse(h.blog_last_success) > 36 * 36e5) h.errors.push("Notebook is over 36 hours old");
+    h.last_completed = now;
+    await szAutoPut(env, "health", h);
+  } catch (e) {
+    console.log("ScoreZaap automation failed", String(e.message));
+  }
+}
+__name(szAutoRun, "szAutoRun");
+function szHeadlineBlock(data, enr) {
+  if (!data?.items?.length) return '<section class="hero"><h2>Latest source headlines</h2><p>Waiting for verified source feeds. Original reports below remain available.</p></section>';
+  enr = enr || {};
+  return '<section class="hero" aria-label="Latest source headlines"><h2>Latest source headlines</h2><ul>' + data.items.slice(0, 20).map((n) => {
+    const e = enr[n.link];
+    const p = e && e.photo;
+    return '<li style="padding:16px 0;list-style:none">' + (p ? '<figure style="margin:0 0 10px"><img src="' + szBlogEsc(p.url) + '" width="' + Number(p.w) + '" height="' + Number(p.h) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="' + szBlogEsc(p.kind === "subject" ? "File photo: " + p.label : p.kind === "sport" ? "Illustrative " + p.label.replace(/ (match|game|competition|tournament|race car)$/, "") + " photo" : "Publisher image") + '" style="display:block;width:100%;max-width:580px;height:auto;max-height:380px;object-fit:cover;border-radius:14px"></figure>' : "") + '<a href="' + szBlogEsc(n.link) + '" rel="noopener nofollow" style="font-weight:700">' + szBlogEsc(n.title) + '</a><small style="display:block">' + szBlogEsc(n.published) + "</small>" + (e && e.summary ? '<p style="margin:8px 0 0;max-width:640px">' + szBlogEsc(e.summary) + "</p>" : "") + '<footer style="font-size:12px;margin-top:8px;max-width:640px">' + szItemCredit(n, e) + "</footer></li>";
+  }).join("") + "</ul></section>";
+}
+__name(szHeadlineBlock, "szHeadlineBlock");
+function szNotebookPage(book) {
+  if (!book) return null;
+  const p = { slug: "scoreboard-notebook", category: "Live scores", title: "Scoreboard notebook: read the latest match snapshots", description: "A daily, data-backed look at match status, scores and fixtures across sports.", body: "<section><h2>A snapshot, not a prediction</h2><p>Updated " + szBlogEsc(book.published) + " UTC from " + book.total + " dated match records. This notebook is generated from structured score data, not AI-written match reporting. A live score can change; a scheduled fixture is not a confirmed result.</p></section>" + book.blocks.map((b) => "<section><h2>" + szBlogEsc(SZ_SPORTS[b.sport]?.[0] || b.sport) + "</h2><p>Source snapshot: " + szBlogEsc(b.checked) + " UTC.</p><ul>" + b.matches.map((m) => '<li><a href="/match/' + encodeURIComponent(b.sport) + "/" + encodeURIComponent(m.id) + '">' + szBlogEsc(m.title) + "</a> \xB7 " + szBlogEsc(m.status) + (m.status === "upcoming" ? " \xB7 Starts " + szBlogEsc(m.start) : m.score ? " \xB7 " + szBlogEsc(m.score) : " \xB7 Score unavailable") + "</li>").join("") + "</ul><p>" + (b.sport === "cricket" ? "Read runs, wickets and overs together. For example, 19.5 overs means 19 completed overs plus five valid balls, not 19.5 decimal overs. A score alone does not establish a win; check the result and innings status." : b.sport === "football" ? "Read the match clock with the status. A halftime score is not the final result, and added time can extend beyond the minimum displayed." : b.sport === "tennis" ? "Separate points, games and sets. A player leading one set has not necessarily won the match; the competition format and final status decide that." : "Keep the score and event status together. Period, inning, session and overtime labels can change how a scoreboard should be read.") + '</p><p><a href="/sports/' + b.sport + '">Open the current ' + szBlogEsc(SZ_SPORTS[b.sport]?.[0] || b.sport) + " board</a></p></section>").join("") + "<section><h2>What this page cannot establish</h2><p>These records do not establish injuries, selection changes, quotations or why a team won. Check the linked match page for updates and primary organisers for those details. We keep the last good notebook when no recent data is available instead of inventing a new report.</p></section>", sources: [["https://scorezaap.tech/", "ScoreZaap dated API scoreboards (Cricbuzz and ESPN sources)"]] };
+  const temp = SZ_BLOG_POSTS;
+  SZ_BLOG_POSTS = [p, ...temp];
+  let page;
+  try {
+    page = szBlogPage(p.slug);
+  } finally {
+    SZ_BLOG_POSTS = temp;
+  }
+  return page.replaceAll("September 30, 2026", szBlogEsc(book.day)).replaceAll("2026-09-30", book.published.slice(0, 10)).replace("Rule references", "Data references").replace("Rule details were checked against these primary sources; event-specific playing conditions can differ.", "The match records came from the timestamped scoreboards linked above; this is automated data analysis, not firsthand reporting.");
+}
+__name(szNotebookPage, "szNotebookPage");
 var index_default = {
   async fetch(request, env, ctx) {
+    env = szQuotaEnv(env);
     const url = new URL(request.url);
+    if (url.hostname === "scorezaap.ashwatthama710.workers.dev") return Response.redirect("https://scorezaap.tech" + url.pathname + url.search, 301);
     if (url.protocol === "http:") return Response.redirect("https://" + url.host + url.pathname + url.search, 301);
     const resp = await this._handle(request, env, ctx, url);
     const h2 = new Headers(resp.headers);
+    h2.set("X-SZ-Storage", SZ_STORE_REV);
     for (const k of Object.keys(SEC_HEADERS)) h2.set(k, SEC_HEADERS[k]);
     return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: h2 });
   },
   async _handle(request, env, ctx, url) {
     const path = url.pathname;
+    if (path === "/api/automation-health") {
+      const h = await szAutoGet(env, "health");
+      const age = h?.last_completed ? Date.now() - Date.parse(h.last_completed) : Infinity;
+      const dbgs = {};
+      for (const k of ["news", "enrich", "scores", "football", "tennis"]) {
+        const v = await szAutoGet(env, "cron_debug_" + k);
+        if (v) dbgs[k] = v;
+      }
+      return json({ version: SZ_AUTO_VERSION, ...h, cron_debug: dbgs, state: age > 45 * 6e4 ? "stalled" : h?.errors?.length ? "degraded" : "ok", ...age > 45 * 6e4 ? { note: "News job has not completed for 45+ minutes; check for Cloudflare CPU-limit kills" } : {} }, age > 45 * 6e4 ? 503 : 200, { "Cache-Control": "no-store" });
+    }
+    if (path === "/blog/scoreboard-notebook") {
+      const page2 = szNotebookPage(await szAutoGet(env, "notebook"));
+      return page2 ? htmlOut(page2, { "Cache-Control": "public, max-age=60" }) : new Response("Notebook awaiting fresh score data", { status: 503 });
+    }
+    if (path.startsWith("/blog/sports-results-")) {
+      const dailyPost = await szDailyGetPost(env, path.slice(6));
+      const dailyPage = dailyPost ? szDailyPostPage(dailyPost) : null;
+      if (dailyPage) return htmlOut(dailyPage, { "Cache-Control": "public, max-age=300" });
+    }
+    if (path.startsWith("/blog/match-result-")) {
+      const matchPost = /^\/blog\/(match-result-\d{4}-\d{2}-\d{2}-[0-9a-f]{2,280})$/.exec(path);
+      const row = matchPost ? await szMatchGetPostBySlug(env, matchPost[1]) : null;
+      const page = row ? szMatchArticlePage(row) : null;
+      if (page) return htmlOut(page, { "Cache-Control": "public, max-age=300" });
+    }
+    if (path === "/news-images/gill-double.png" || path === "/news-images/rohit-hundred.png") {
+      const b64 = path.includes("gill-double") ? SZ_NEWS_IMAGE_GILL_DOUBLE : SZ_NEWS_IMAGE_ROHIT_HUNDRED;
+      return new Response(Uint8Array.from(atob(b64), (c2) => c2.charCodeAt(0)), { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff" } });
+    }
+    if (path === "/celebrations.js") return new Response(SZ_CELEBRATION_JS, { headers: { "Content-Type": "application/javascript;charset=UTF-8", "Cache-Control": "public, max-age=300" } });
+    if (path === "/celebrations.css") return new Response(SZ_CELEBRATION_CSS, { headers: { "Content-Type": "text/css;charset=UTF-8", "Cache-Control": "public, max-age=300" } });
+    if (path === "/news/" || /^\/news\/[^/]+\/$/.test(path)) return Response.redirect("https://" + url.host + path.replace(/\/$/, ""), 301);
+    if (path === "/asian-games/") return Response.redirect("https://" + url.host + "/asian-games", 301);
+    if (path === "/asian-games/medals" || path === "/asian-games/schedule") return htmlOut(szAsianInfo(path.split("/").pop()), { "Cache-Control": "public, max-age=60" });
+    if (path === "/asian-games") return htmlOut(szNewsPage("__asian__"), { "Cache-Control": "public, max-age=60" });
+    if (path === "/news" || path.startsWith("/news/")) {
+      let page2 = szNewsPage(path === "/news" ? "" : path.slice(6));
+      if (path === "/news" && page2) {
+        const block = szHeadlineBlock(await szAutoGet(env, "headlines"), (await szAutoGet(env, "enrich"))?.items);
+        page2 = page2.replace(/<main[^>]*>/, (m) => m + block);
+      }
+      return page2 ? htmlOut(page2, { "Cache-Control": "public, max-age=60" }) : new Response('<!doctype html><html><head><title>News not found - ScoreZaap</title><meta name="robots" content="noindex"></head><body><h1>News not found</h1><a href="/news">Browse news</a></body></html>', { status: 404, headers: { "Content-Type": "text/html;charset=UTF-8" } });
+    }
+    if (path === "/news-sitemap.xml") {
+      const recent = SZ_NEWS_POSTS.filter((p) => Date.now() - new Date(p.published).getTime() < 2 * 864e5);
+      const x = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">' + recent.map((p) => "<url><loc>https://scorezaap.tech/news/" + p.slug + "</loc><news:news><news:publication><news:name>ScoreZaap</news:name><news:language>en</news:language></news:publication><news:publication_date>" + p.published + "</news:publication_date><news:title>" + szBlogEsc(p.title) + "</news:title></news:news></url>").join("") + "</urlset>";
+      return new Response(x, { headers: { "Content-Type": "application/xml;charset=UTF-8", "Cache-Control": "public, max-age=300" } });
+    }
+    if (path.startsWith("/sports/")) {
+      const page2 = await szSportPage(path.slice(8), env);
+      return page2 ? htmlOut(page2, { "Cache-Control": "public, max-age=20" }) : new Response("Sport not found", { status: 404 });
+    }
+    if (path === "/llms.txt") return new Response("# ScoreZaap\n\nLive multi-sport scores and original rules explainers. Score data is a live snapshot, can be delayed or corrected, and should be read with match status. Do not infer historical traffic or guaranteed update latency.\n\n- https://scorezaap.tech/ : live scores\n- https://scorezaap.tech/blog : original sports guides with primary references\n- https://scorezaap.tech/schedule : fixtures\n- https://scorezaap.tech/archives : results\n- https://scorezaap.tech/sitemap.xml : discoverable pages\n", { headers: { "Content-Type": "text/plain;charset=UTF-8" } });
+    if (path === "/blog/" || /^\/blog\/[^/]+\/$/.test(path)) return Response.redirect("https://" + url.host + path.replace(/\/$/, ""), 301);
+    if (path === "/blog" || path.startsWith("/blog/")) {
+      let page2 = szBlogPage(path === "/blog" ? "" : path.slice(6));
+      if (path === "/blog" && page2) {
+        const pageNo = Math.max(1, Math.min(5000, Number.parseInt(url.searchParams.get("daily_page") || "1", 10) || 1));
+        const matchPage = Math.max(1, Math.min(5000, Number.parseInt(url.searchParams.get("match_page") || "1", 10) || 1));
+        const pageSize = 20;
+        const matchTotal = await szMatchCount(env);
+        const matchPosts = await szMatchListPosts(env, pageSize, (matchPage - 1) * pageSize);
+        const matchArchive = szMatchArchiveHtml(matchPosts, matchPage, matchTotal, pageSize);
+        if (matchArchive) page2 = page2.replace("</nav>", "</nav>" + matchArchive);
+        const dailyTotal = await szDailyPostCount(env);
+        const dailyPosts = await szDailyListPosts(env, pageSize, (pageNo - 1) * pageSize);
+        const archive = szDailyArchiveHtml(dailyPosts, pageNo, dailyTotal, pageSize);
+        if (archive) page2 = page2.replace("</nav>", "</nav>" + archive);
+      }
+      if (path === "/blog" && page2 && await szAutoGet(env, "notebook")) page2 = page2.replace(/<main[^>]*>/, (m) => m + '<section class="hero"><h2>Daily scoreboard notebook</h2><p>One evolving daily notebook, based only on recent match records. No invented reports.</p><a href="/blog/scoreboard-notebook">Read the latest notebook</a></section>');
+      return page2 ? htmlOut(page2, { "Cache-Control": "public, max-age=300" }) : new Response('<!doctype html><html lang="en"><head><title>Guide not found - ScoreZaap</title><meta name="robots" content="noindex"></head><body><h1>Guide not found</h1><a href="/blog">Browse sports guides</a></body></html>', { status: 404, headers: { "Content-Type": "text/html;charset=UTF-8" } });
+    }
     if (path === "/robots.txt") {
-      return new Response("User-agent: *\nAllow: /\nSitemap: https://scorezaap.tech/sitemap.xml\n", { headers: { "content-type": "text/plain;charset=UTF-8", "Cache-Control": "public, max-age=3600" } });
+      return new Response("User-agent: *\nAllow: /\nSitemap: https://scorezaap.tech/sitemap.xml\nSitemap: https://scorezaap.tech/news-sitemap.xml\n", { headers: { "content-type": "text/plain;charset=UTF-8", "Cache-Control": "public, max-age=3600" } });
     }
     if (path === "/ads.txt") {
       return new Response("google.com, pub-2184299953562291, DIRECT, f08c47fec0942fa0\n", { headers: { "content-type": "text/plain;charset=UTF-8", "Cache-Control": "public, max-age=3600" } });
@@ -3428,7 +4720,12 @@ var index_default = {
     if (path === "/sitemap.xml") {
       const cblob = env.SPORTS_KV ? await env.SPORTS_KV.get("cricket", "json").catch(() => null) : null;
       const fblob = env.SPORTS_KV ? await env.SPORTS_KV.get("football", "json").catch(() => null) : null;
-      const urls = ["/", "/rankings", "/schedule", "/archives", "/about", "/contact", "/privacy"];
+      const urls = ["/", "/rankings", "/schedule", "/archives", "/about", "/contact", "/privacy", "/blog", "/asian-games", "/asian-games/medals", "/asian-games/schedule", ...Object.keys(SZ_SPORTS).map((s) => "/sports/" + s), ...SZ_BLOG_POSTS.map((p) => "/blog/" + p.slug), "/news", ...SZ_NEWS_POSTS.map((p) => "/news/" + p.slug)];
+      if (await szAutoGet(env, "notebook")) urls.push("/blog/scoreboard-notebook");
+      const dailyPosts = await szDailySitemapPosts(env);
+      for (const dailyPost of dailyPosts) urls.push("/blog/" + dailyPost.slug);
+      const matchPosts = await szMatchSitemapPosts(env);
+      for (const matchPost of matchPosts) urls.push("/blog/" + matchPost.slug);
       const ser = {};
       for (const m of cblob && Array.isArray(cblob.matches) ? cblob.matches : []) {
         urls.push("/match/cricket/" + encodeURIComponent(m.id));
@@ -3458,7 +4755,7 @@ var index_default = {
           const hitR = await szCache.match(szKey);
           if (hitR) {
             const hr = new Response(hitR.body, hitR);
-            hr.headers.set("Cache-Control", "public, max-age=5");
+            hr.headers.set("Cache-Control", "public, max-age=2");
             hr.headers.delete("Age");
             hr.headers.set("X-SZ-Edge", "hit");
             return hr;
@@ -3509,13 +4806,38 @@ var index_default = {
         liveAt = await szLiveOverlay(c2, f2, { nba: nba2, mlb: mlb2, nhl: nhl2, tennis: tennis2, f1: f12 });
       } catch (e) {
       }
+      try {
+        const verified = new Map((c2.matches || []).filter((m) => m.celebrationVerifiedAt).map((m) => [String(m.id), m]));
+        const latest = verified.size && env.SPORTS_KV ? await env.SPORTS_KV.get("cricket", "json") : null;
+        if (latest && latest.at === c2.at && Array.isArray(latest.matches)) {
+          let changed = false;
+          const matches = latest.matches.map((m) => {
+            const fresh = verified.get(String(m.id));
+            if (!fresh) return m;
+            const next = { ...m };
+            for (const key of ["status", "statusText", "scores"]) {
+              if (JSON.stringify(next[key]) !== JSON.stringify(fresh[key])) {
+                next[key] = fresh[key];
+                changed = true;
+              }
+            }
+            return next;
+          });
+          if (changed) {
+            const next = { ...latest, at: Date.now(), matches };
+            await env.SPORTS_KV.put("cricket", JSON.stringify(next));
+            c2.at = next.at;
+          }
+        }
+      } catch (e) {
+      }
       const szResp = json({
         cricket: c2.matches,
         football: f2.matches,
         espn: { nba: nba2.matches, mlb: mlb2.matches, nhl: nhl2.matches, tennis: tennis2.matches, f1: f12.matches },
         updated: { cricket: c2.at, football: f2.at, live: liveAt },
         live: [...c2.matches, ...f2.matches].some((m) => m.status === "live")
-      }, 200, { "Cache-Control": "public, max-age=5" });
+      }, 200, { "Cache-Control": "public, max-age=2" });
       if (szCache) {
         try {
           ctx.waitUntil(szCache.put(szKey, szResp.clone()).catch(() => null));
@@ -3683,6 +5005,8 @@ var index_default = {
     __name2222(seriesData, "seriesData");
     __name22222(seriesData, "seriesData");
     __name222222(seriesData, "seriesData");
+    __name2222222(seriesData, "seriesData");
+    __name22222222(seriesData, "seriesData");
     if (path === "/api/push/subscribe" && request.method === "POST") {
       try {
         const b = await request.json();
@@ -3751,7 +5075,7 @@ var index_default = {
         readKV(env, "espn_f1", { matches: [] })
       ]);
       const all = [...c2.matches, ...f2.matches, ...nba2.matches, ...mlb2.matches, ...nhl2.matches, ...tennis2.matches, ...f12.matches];
-      const hay = /* @__PURE__ */ __name222222((m) => [m.title, m.home?.name, m.home?.short, m.away?.name, m.away?.short, m.venue, m.matchType].filter(Boolean).join(" ").toLowerCase(), "hay");
+      const hay = /* @__PURE__ */ __name22222222((m) => [m.title, m.home?.name, m.home?.short, m.away?.name, m.away?.short, m.venue, m.matchType].filter(Boolean).join(" ").toLowerCase(), "hay");
       const rank = { live: 0, upcoming: 1, finished: 2 };
       const matches = all.filter((m) => hay(m).includes(q)).sort((a, b) => (rank[a.status] != null ? rank[a.status] : 3) - (rank[b.status] != null ? rank[b.status] : 3) || new Date(a.start) - new Date(b.start)).slice(0, 25);
       const ser = [];
@@ -3794,7 +5118,7 @@ var index_default = {
         cached = { format: fmt, type: typ, updated: d.rank[0] && d.rank[0].lastUpdatedOn, rows: d.rank.map((r) => ({ id: r.id, rank: +r.rank, name: r.name, country: r.country, rating: +(r.rating || r.points || 0), trend: r.trend || "Flat", img: r.faceImageId ? `https://www.cricbuzz.com/a/img/v1/152x152/i1/c${r.faceImageId}/i.jpg` : null })) };
         if (env.SPORTS_KV) await env.SPORTS_KV.put(ck, JSON.stringify(cached), { expirationTtl: 24 * 3600 });
       }
-      return json(cached, 200, { "Cache-Control": "public, max-age=3600" });
+      return json(szAuditRank(cached), 200, { "Cache-Control": "public, max-age=3600" });
     }
     if (path === "/api/player") {
       const pid = (url.searchParams.get("id") || "").replace(/[^0-9]/g, "");
@@ -3833,7 +5157,7 @@ var index_default = {
       let cached = env.SPORTS_KV ? await env.SPORTS_KV.get(ck, "json") : null;
       if (!cached) {
         try {
-          const clean = /* @__PURE__ */ __name222222((x) => x.replace(/(stadium|ground|park|arena|oval|field|cricket club|sports complex|international|national)/gi, "").replace(/\s{2,}/g, " ").trim(), "clean");
+          const clean = /* @__PURE__ */ __name22222222((x) => x.replace(/(stadium|ground|park|arena|oval|field|cricket club|sports complex|international|national)/gi, "").replace(/\s{2,}/g, " ").trim(), "clean");
           const cands = [];
           const parts = venue.split(",").map((x) => x.trim()).filter(Boolean);
           if (parts.length > 1) {
@@ -3928,13 +5252,23 @@ var index_default = {
       }
     }
     if (path === "/api/news") {
-      const n2 = await readKV(env, "news", { at: 0, items: [] });
-      return json({ items: n2.items, updated: n2.at }, 200, { "Cache-Control": "public, max-age=60, stale-while-revalidate=240" });
+      const headlines = await szAutoGet(env, "headlines");
+      const enr = (await szAutoGet(env, "enrich"))?.items || {};
+      const original = szNewsSorted().map((p) => ({ title: p.title, desc: p.description, link: "https://scorezaap.tech/news/" + p.slug, source: "ScoreZaap", published: p.published }));
+      const items = [...original, ...(headlines?.items || []).map((n2) => {
+        const e = enr[n2.link];
+        const rawDesc = String(n2.desc || "");
+        const publisherDesc = /^Plus(?:,|:)/i.test(rawDesc) ? "" : rawDesc;
+        const summarySource = (n2.title + ". " + (publisherDesc && publisherDesc.toLowerCase() !== n2.title.toLowerCase() ? publisherDesc : "")).trim();
+        const summary = e?.summary && szValidSummary(e.summary, summarySource) ? e.summary : "";
+        return { title: n2.title, desc: summary || publisherDesc, summary, link: n2.link, source: n2.source, published: n2.published, image: e?.photo ? { url: e.photo.url, kind: e.photo.kind, credit: e.photo.artist, licence: e.photo.licence, page: e.photo.page } : null };
+      })].sort((a, b) => Date.parse(b.published) - Date.parse(a.published));
+      return json({ items, updated: items[0]?.published, checked: headlines?.checked }, 200, { "Cache-Control": "public, max-age=60" });
     }
     if (path === "/api/refresh") {
       if (!env.CRON_SECRET || (request.headers.get("x-refresh-token") || url.searchParams.get("token") || "") !== env.CRON_SECRET) return json({ error: "unauthorized" }, 401);
       const kind = url.searchParams.get("kind") || "all";
-      ctx.waitUntil(refresh(kind === "football" ? "football" : "all", env));
+      ctx.waitUntil(refresh(kind === "football" ? "football" : "all", env, ctx));
       return json({ ok: true, kind });
     }
     if (path === "/api/match") {
@@ -4024,6 +5358,9 @@ var index_default = {
             cbzScorecard(env, id, cached.title, cached.date, liveNow).catch(() => null),
             liveNow || cached.ended ? cbzCommentary(env, id, cached.title, cached.date, liveNow).catch(() => null) : null
           ]);
+          if (scorecard && Array.isArray(scorecard.innings) && scorecard.innings.length) {
+            cached = { ...cached, status: scorecard.status || cached.status, ended: !!scorecard.complete, started: true, innings: scorecard.innings.map((i) => ({ inning: i.team, r: i.runs, w: i.wkts, o: i.overs })) };
+          }
           let graphs = null;
           try {
             const acc = env.SPORTS_KV ? await env.SPORTS_KV.get("ovr_" + id, "json") : null;
@@ -4037,8 +5374,25 @@ var index_default = {
             if (env.SPORTS_KV && scorecard && Array.isArray(scorecard.innings) && scorecard.innings.length) {
               const cl = await env.SPORTS_KV.get("cricket", "json").catch(() => null);
               const lm2 = cl && Array.isArray(cl.matches) ? cl.matches.find((m) => m.id === id) : null;
-              if (lm2 && lm2.status === "live") {
-                const better2 = /* @__PURE__ */ __name2222((cur2, idx2, val2) => {
+              if (lm2 && lm2.status === "finished" && Array.isArray(lm2.scores) && lm2.scores.length) {
+  const finalInnings = lm2.scores.map((s) => {
+    const pm = /^(\d+)\/(\d+)\s*\((\d+\.?\d*)\)$/.exec(String(s.value || ""));
+    return pm ? { inning: s.inning || "", r: +pm[1], w: +pm[2], o: +pm[3] } : null;
+  }).filter(Boolean);
+  if (finalInnings.length) {
+    cached = { ...cached, status: lm2.statusText || cached.status, ended: true, started: true, innings: finalInnings };
+    if (scorecard && Array.isArray(scorecard.innings)) {
+      scorecard.innings = scorecard.innings.map((i, idx) => {
+        const f = finalInnings[idx];
+        return f ? { ...i, runs: f.r, wkts: f.w, overs: f.o } : i;
+      });
+      scorecard.complete = true;
+      scorecard.status = lm2.statusText || scorecard.status;
+    }
+  }
+}
+if (lm2 && lm2.status === "live") {
+                const better2 = /* @__PURE__ */ __name222222((cur2, idx2, val2) => {
                   const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
                   if (!pm) return false;
                   const cRuns = +pm[1], cOv = +pm[3];
@@ -4085,6 +5439,7 @@ var index_default = {
           const stt = comp0.status && comp0.status.type || {};
           const live2 = stt.state === "in";
           const fdetail2 = {
+            celebrationVerifiedAt: Date.now(),
             title: lm3 && lm3.title || sum.header && sum.header.name || `${aw.team && aw.team.displayName || "?"} at ${hm.team && hm.team.displayName || "?"}`,
             status: stt.completed ? "FINISHED" : live2 ? "IN_PLAY" : "TIMED",
             venue: comp0.venue && comp0.venue.fullName || lm3 && lm3.venue || null,
@@ -4103,7 +5458,7 @@ var index_default = {
           };
           const skip2 = ["Kickoff", "Start Delay", "End Delay"];
           const timeline2 = (sum.keyEvents || []).filter((k) => !skip2.includes(k.type && k.type.text)).map((k) => ({ min: k.clock && k.clock.displayValue || "", type: k.type && k.type.text || "", text: k.text || k.shortText || "", team: k.team && k.team.displayName || "", goal: !!k.scoringPlay }));
-          const commentary2 = (sum.commentary || []).slice(-14).reverse().map((c) => ({ min: c.time && c.time.displayValue || "", text: c.text }));
+          const commentary2 = (sum.commentary || []).slice(-14).reverse().map((c2) => ({ min: c2.time && c2.time.displayValue || "", text: c2.text }));
           let stats2 = null;
           const bx2 = sum.boxscore && sum.boxscore.teams || [];
           const homeId2 = hm.team && String(hm.team.id);
@@ -4211,14 +5566,15 @@ ${snapshot}${liveSc}` },
         return json({ error: "Zaap is busy right now. Try again in a bit." }, 503);
       }
     }
-    if (path === "/rankings") return htmlOut(RANKINGS_PAGE);
+    if (path === "/rankings") return htmlOut(await szAuditRankPage(env));
     if (path === "/contact") return htmlOut(INFO_PAGE.replace(/__TITLE__/g, "Contact Us").replace("__BODY__", CONTACT_BODY));
     if (path === "/about") return htmlOut(INFO_PAGE.replace(/__TITLE__/g, "About Us").replace("__BODY__", ABOUT_BODY));
     if (path === "/privacy") return htmlOut(INFO_PAGE.replace(/__TITLE__/g, "Privacy Policy").replace("__BODY__", PRIVACY_BODY));
     if (path.startsWith("/player/")) return htmlOut(PLAYER_PAGE);
+    if (path === "/series/f1/x") return htmlOut(await szAuditF1Page(env));
     if (path.startsWith("/series/")) return htmlOut(SERIES_PAGE);
     if (path === "/schedule" || path === "/archives") {
-      const sp2 = SCHED_PAGE.replace("<title>Schedule \xB7 ScoreZaap</title>", `<title>${path === "/archives" ? "Archives - Results" : "Schedule - Fixtures"} - ScoreZaap</title><link rel="canonical" href="https://scorezaap.tech${path}"><meta name="description" content="${path === "/archives" ? "Recent cricket and football results on ScoreZaap." : "Upcoming cricket and football fixtures and live matches on ScoreZaap."}">`);
+      const sp2 = (await szAuditSchedule(env, path)).replace("<title>Schedule \xB7 ScoreZaap</title>", `<title>${path === "/archives" ? "Archives - Results" : "Schedule - Fixtures"} - ScoreZaap</title><link rel="canonical" href="https://scorezaap.tech${path}"><meta name="description" content="${path === "/archives" ? "Recent cricket and football results on ScoreZaap." : "Upcoming cricket and football fixtures and live matches on ScoreZaap."}">`);
       return htmlOut(sp2);
     }
     if (path.startsWith("/team/")) {
@@ -4258,7 +5614,7 @@ ${snapshot}${liveSc}` },
       } catch (e) {
       }
       const ogTags = `<meta property="og:type" content="website"><meta property="og:site_name" content="ScoreZaap"><meta property="og:title" content="${escAttr(mtitle + " - ScoreZaap")}"><meta property="og:description" content="${escAttr(mdesc)}"><meta property="og:url" content="https://scorezaap.tech${path}"><meta property="og:image" content="https://scorezaap.tech/icon-512.png"><meta name="twitter:card" content="summary"><meta name="twitter:title" content="${escAttr(mtitle + " - ScoreZaap")}"><meta name="twitter:description" content="${escAttr(mdesc)}">`;
-      const canonLd = `<link rel="canonical" href="https://scorezaap.tech${path}"><meta name="description" content="${escAttr(mdesc)}"><script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@type": "SportsEvent", name: mtitle, url: "https://scorezaap.tech" + path, startDate: fstart || void 0, eventStatus: "https://schema.org/EventScheduled", location: fvenue ? { "@type": "Place", name: fvenue } : void 0, homeTeam: { "@type": "SportsTeam", name: fhome || mtitle.split(" vs ")[0] || mtitle }, awayTeam: { "@type": "SportsTeam", name: faway || mtitle.split(" vs ")[1] || "" } }).replace(/</g, "\\u003c")}</${"script"}>`;
+      const canonLd = `<link rel="canonical" href="https://scorezaap.tech${path}"><meta name="description" content="${escAttr(mdesc)}"><script type="application/ld+json">${JSON.stringify(fstart ? { "@context": "https://schema.org", "@type": "SportsEvent", name: mtitle, url: "https://scorezaap.tech" + path, startDate: fstart, eventStatus: "https://schema.org/EventScheduled", location: { "@type": "Place", name: fvenue || "Venue to be confirmed", address: fvenue || "To be confirmed" }, homeTeam: { "@type": "SportsTeam", name: fhome || mtitle.split(" vs ")[0] || mtitle }, awayTeam: { "@type": "SportsTeam", name: faway || mtitle.split(" vs ")[1] || "" } } : { "@context": "https://schema.org", "@type": "WebPage", name: mtitle, url: "https://scorezaap.tech" + path }).replace(/</g, "\\u003c")}</${"script"}>`;
       let page2 = MATCH_PAGE.replace("<title>Match \xB7 ScoreZaap</title>", `<title>${escAttr(mtitle)} - ScoreZaap</title>${ogTags}${canonLd}`);
       try {
         const apiUrl2 = new URL(request.url);
@@ -4292,8 +5648,9 @@ ${snapshot}${liveSc}` },
       if (tail && tail.length > 6 && !seenSer[tail]) seenSer[tail] = { id: "byname/" + encodeURIComponent(tail), name: tail };
     }
     const seriesItems = Object.values(seenSer).slice(0, 6);
-    const boot = JSON.stringify({ cricket: c.matches, football: f.matches, espn: { nba: nba.matches, mlb: mlb.matches, nhl: nhl.matches, tennis: tennis.matches, f1: f1.matches }, news: n, series: seriesItems }).replace(/</g, "<");
+    const boot = JSON.stringify({ cricket: c.matches, football: f.matches, espn: { nba: nba.matches, mlb: mlb.matches, nhl: nhl.matches, tennis: tennis.matches, f1: f1.matches }, news: { items: szNewsSorted().map((p) => ({ title: p.title, desc: p.description, link: "https://scorezaap.tech/news/" + p.slug, source: "ScoreZaap", published: p.published })) }, series: seriesItems }).replace(/</g, "<");
     let page = PAGE.replace("/*__BOOT__*/", "window.__BOOT=" + boot + ";");
+    page = page.replace('<div class="tabs" id="tabs">', szAsianFeature(true) + '<div class="tabs" id="tabs">');
     try {
       const homeHtml = homeSSR({ cricket: c.matches, football: f.matches, espn: { nba: nba.matches, mlb: mlb.matches, nhl: nhl.matches, tennis: tennis.matches, f1: f1.matches } });
       const newsHtml = newsSSR(n.items);
@@ -4303,10 +5660,31 @@ ${snapshot}${liveSc}` },
     return htmlOut(page, { "Cache-Control": "public, max-age=20, stale-while-revalidate=40" });
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(refresh(event.cron.startsWith("*/20") ? "all" : "football", env, ctx));
+    env = szQuotaEnv(env);
+    const cron = event.cron, t0 = Date.now();
+    const footballCron = cron === "1,21,41 * * * *";
+    const slot = Math.round(new Date(event.scheduledTime).getUTCMinutes() / 5) % 4;
+    const name = footballCron ? "football" : slot === 0 ? "scores" : slot === 2 ? "news" : "enrich";
+    const dbg = /* @__PURE__ */ __name(async (stage, err) => {
+      try {
+        await env.DB.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind("cron_debug_" + name, JSON.stringify({ cron, slot, stage, at: (/* @__PURE__ */ new Date()).toISOString(), ms: Date.now() - t0, err: err ? String(err.message || err).slice(0, 300) : null }), (/* @__PURE__ */ new Date()).toISOString()).run();
+      } catch (e) {
+      }
+    }, "dbg");
+    const job = footballCron ? () => refresh("football", env, ctx) : slot === 0 ? () => refresh("all", env, ctx) : slot === 2 ? () => szAutoRun(env) : () => szEnrichRun(env);
+    ctx.waitUntil((async () => {
+      await dbg("start");
+      try {
+        await job();
+        await dbg("done");
+      } catch (e) {
+        await dbg("error", e);
+      }
+    })());
   }
 };
 export {
   index_default as default
 };
 //# sourceMappingURL=index.js.map
+export { fetchEspnSport, ESPN_SPORTS, fetchNews, szNewsPublishedDate, szAutoItems };
