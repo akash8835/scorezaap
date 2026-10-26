@@ -232,10 +232,10 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
         let ev = null;
         const pre = "soccer/" + slug + ":";
         if (String(m.id).startsWith(pre)) ev = sb.events.find((e) => String(e.id) === String(m.id).slice(pre.length));
-        if (!ev) {
-          const hn = norm(m.home && m.home.name), an = norm(m.away && m.away.name);
-          const hit = /* @__PURE__ */ __name2((e, n) => (((e.competitions || [])[0] || {}).competitors || []).some((c) => [c.team?.displayName, c.team?.shortDisplayName, c.team?.name].map(norm).some((y) => y && n && (n.includes(y) || y.includes(n)))), "hit");
-          ev = sb.events.find((e) => hit(e, hn) && hit(e, an));
+        if (!ev && szFbIds(m)) {
+          const h0 = szFbEspnEvent(m, sb.events);
+          if (h0 && szFbApplyEspn(m, h0)) m.celebrationVerifiedAt = Date.now();
+          continue;
         }
         if (!ev) continue;
         const mm = espnEventToMatch("football", "soccer/" + slug, "", ev, "");
@@ -516,7 +516,258 @@ __name2222222(fetchCricket, "fetchCricket");
 __name22222222(fetchCricket, "fetchCricket");
 var FOOT_COMPS = ["PL", "ELC", "BL1", "SA", "PD", "FL1", "DED", "PPL", "BSA", "CL"];
 var FOOT_ESPN_LEAGUES = [["uefa.nations", "UEFA Nations League"], ["fifa.friendly", "International Friendly"], ["fifa.worldq.uefa", "World Cup Qualifiers - UEFA"], ["fifa.worldq.afc", "World Cup Qualifiers - AFC"], ["fifa.worldq.conmebol", "World Cup Qualifiers - CONMEBOL"]];
-async function fetchFootball(env) {
+var FOOT_COMP_SLUG = { PL: "eng.1", ELC: "eng.2", BL1: "ger.1", SA: "ita.1", PD: "esp.1", FL1: "fra.1", DED: "ned.1", PPL: "por.1", BSA: "bra.1", CL: "uefa.champions" };
+// football-data.org team name -> ESPN team id. Verified one by one; unmapped teams are never reconciled.
+var FOOT_TEAM_ID = {
+ "1. FC Köln": 122,
+ "1. FC Union Berlin": 598,
+ "1. FSV Mainz 05": 2950,
+ "AC Milan": 103,
+ "AC Monza": 4007,
+ "ACF Fiorentina": 109,
+ "ADO Den Haag": 2726,
+ "AFC Ajax": 139,
+ "AFC Bournemouth": 349,
+ "AJ Auxerre": 172,
+ "AS Monaco FC": 174,
+ "AS Roma": 104,
+ "AZ": 140,
+ "Académico de Viseu FC": 21607,
+ "Angers SCO": 7868,
+ "Arsenal FC": 359,
+ "Aston Villa FC": 362,
+ "Atalanta BC": 105,
+ "Athletic Club": 93,
+ "Bayer 04 Leverkusen": 131,
+ "Birmingham City FC": 392,
+ "Blackburn Rovers FC": 365,
+ "Bologna FC 1909": 107,
+ "Bolton Wanderers FC": 358,
+ "Borussia Dortmund": 124,
+ "Borussia Mönchengladbach": 268,
+ "Botafogo FR": 6086,
+ "Brentford FC": 337,
+ "Brighton & Hove Albion FC": 331,
+ "Bristol City FC": 333,
+ "Burnley FC": 379,
+ "CA Mineiro": 7632,
+ "CA Osasuna": 97,
+ "CA Paranaense": 3458,
+ "CD Nacional": 3472,
+ "CD Santa Clara": 12215,
+ "CF Estrela da Amadora": 21610,
+ "CR Flamengo": 819,
+ "CR Vasco da Gama": 3454,
+ "CS Marítimo": 552,
+ "Cagliari Calcio": 2925,
+ "Cardiff City FC": 347,
+ "Casa Pia AC": 21581,
+ "Chapecoense AF": 9318,
+ "Charlton Athletic FC": 372,
+ "Chelsea FC": 363,
+ "Club Atlético de Madrid": 1068,
+ "Clube do Remo": 4936,
+ "Como 1907": 2572,
+ "Coritiba FBC": 3456,
+ "Coventry City FC": 388,
+ "Cruzeiro EC": 2022,
+ "Crystal Palace FC": 384,
+ "Deportivo Alavés": 96,
+ "Derby County FC": 374,
+ "EC Bahia": 9967,
+ "EC Vitória": 3457,
+ "ES Troyes AC": 170,
+ "Eintracht Frankfurt": 125,
+ "Elche CF": 3751,
+ "Everton FC": 368,
+ "FC Alverca": 21613,
+ "FC Arouca": 15784,
+ "FC Augsburg": 3841,
+ "FC Barcelona": 83,
+ "FC Bayern München": 132,
+ "FC Famalicão": 12698,
+ "FC Groningen": 145,
+ "FC Internazionale Milano": 110,
+ "FC Lorient": 273,
+ "FC Porto": 437,
+ "FC Schalke 04": 133,
+ "FC Twente '65": 152,
+ "FC Utrecht": 153,
+ "FK Bodø/Glimt": 2980,
+ "FK Shakhtar Donetsk": 493,
+ "Feyenoord Rotterdam": 142,
+ "Fluminense FC": 3445,
+ "Fortuna Sittard": 143,
+ "Frosinone Calcio": 4057,
+ "Fulham FC": 370,
+ "GD Estoril Praia": 12216,
+ "Galatasaray SK": 432,
+ "Genoa CFC": 3263,
+ "Getafe CF": 2922,
+ "Gil Vicente FC": 3699,
+ "Go Ahead Eagles": 3706,
+ "Grêmio FBPA": 6273,
+ "Hamburger SV": 127,
+ "Hull City AFC": 306,
+ "Ipswich Town FC": 373,
+ "Juventus FC": 111,
+ "LASK Linz": 4411,
+ "Le Havre AC": 3236,
+ "Le Mans FC": 2697,
+ "Leeds United FC": 357,
+ "Levante UD": 1538,
+ "Lille OSC": 166,
+ "Lincoln City FC": 314,
+ "Liverpool FC": 364,
+ "Manchester City FC": 382,
+ "Manchester United FC": 360,
+ "Middlesbrough FC": 369,
+ "Millwall FC": 391,
+ "Mirassol FC": 9169,
+ "Moreirense FC": 3696,
+ "Málaga CF": 99,
+ "NEC": 147,
+ "Newcastle United FC": 361,
+ "Norwich City FC": 381,
+ "Nottingham Forest FC": 393,
+ "OGC Nice": 2502,
+ "Olympique Lyonnais": 167,
+ "Olympique de Marseille": 176,
+ "PEC Zwolle": 2565,
+ "PSV": 148,
+ "Paris FC": 6851,
+ "Paris Saint-Germain FC": 160,
+ "Parma Calcio 1913": 115,
+ "Portsmouth FC": 385,
+ "Preston North End FC": 394,
+ "Queens Park Rangers FC": 334,
+ "RB Bragantino": 6079,
+ "RB Leipzig": 11420,
+ "RC Celta de Vigo": 85,
+ "RC Deportivo La Coruña": 90,
+ "RC Strasbourg Alsace": 180,
+ "RCD Espanyol de Barcelona": 88,
+ "Racing Club de Lens": 175,
+ "Rayo Vallecano de Madrid": 101,
+ "Real Betis Balompié": 244,
+ "Real Madrid CF": 86,
+ "Real Racing Club de Santander": 87,
+ "Real Sociedad de Fútbol": 89,
+ "Rio Ave FC": 3822,
+ "SBV Excelsior": 2566,
+ "SC Cambuur-Leeuwarden": 3736,
+ "SC Corinthians Paulista": 874,
+ "SC Freiburg": 126,
+ "SC Heerenveen": 146,
+ "SC Internacional": 1936,
+ "SC Paderborn 07": 3307,
+ "SE Palmeiras": 2029,
+ "SS Lazio": 112,
+ "SSC Napoli": 114,
+ "SV 07 Elversberg": 10388,
+ "SV Werder Bremen": 137,
+ "Santos FC": 2674,
+ "Sevilla FC": 243,
+ "Sheffield United FC": 398,
+ "Southampton FC": 376,
+ "Sparta Rotterdam": 151,
+ "Sport Lisboa e Benfica": 1929,
+ "Sporting Clube de Braga": 2994,
+ "Sporting Clube de Portugal": 2250,
+ "Stade Brestois 29": 6997,
+ "Stade Rennais FC 1901": 169,
+ "Stoke City FC": 336,
+ "Sunderland AFC": 366,
+ "Swansea City AFC": 318,
+ "São Paulo FC": 2026,
+ "TSG 1899 Hoffenheim": 7911,
+ "Telstar 1963": 3735,
+ "Torino FC": 239,
+ "Tottenham Hotspur FC": 367,
+ "Toulouse FC": 179,
+ "US Lecce": 113,
+ "US Sassuolo Calcio": 3997,
+ "Udinese Calcio": 118,
+ "Valencia CF": 94,
+ "Venezia FC": 17530,
+ "VfB Stuttgart": 134,
+ "Villarreal CF": 102,
+ "Vitória SC": 5309,
+ "Watford FC": 395,
+ "West Bromwich Albion FC": 383,
+ "West Ham United FC": 371,
+ "Willem II Tilburg": 156,
+ "Wolverhampton Wanderers FC": 380,
+ "Wrexham AFC": 352,
+ "ŠK Slovan Bratislava": 521
+};
+function szFbIds(m) {
+  const h = FOOT_TEAM_ID[m && m.home && m.home.name], a = FOOT_TEAM_ID[m && m.away && m.away.name];
+  return h && a ? [String(h), String(a)] : null;
+}
+function szFbEspnEvent(m, events) {
+  const ids = szFbIds(m);
+  if (!ids || !m.start) return null;
+  const t0 = new Date(m.start).getTime();
+  const hits = [];
+  for (const e of events || []) {
+    const comps = ((e.competitions || [])[0] || {}).competitors || [];
+    const eh = comps.find((x) => x.homeAway === "home"), ea = comps.find((x) => x.homeAway === "away");
+    if (!eh || !ea || !eh.team || !ea.team) continue;
+    if (String(eh.team.id) !== ids[0] || String(ea.team.id) !== ids[1]) continue;
+    if (Math.abs(new Date(e.date).getTime() - t0) > 3 * 36e5) continue;
+    hits.push({ e, eh, ea });
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+function szFbApplyEspn(m, hit) {
+  const st = (hit.e.competitions[0].status || {}).type || {};
+  const hs = hit.eh.score, as = hit.ea.score;
+  if (hs == null || as == null || hs === "" || as === "" || isNaN(+hs) || isNaN(+as)) return false;
+  let status = null;
+  if (st.completed || st.state === "post") status = "finished";
+  else if (st.state === "in") status = "live";
+  if (!status) return false;
+  m.status = status;
+  m.statusText = st.shortDetail || st.detail || (status === "finished" ? "FT" : "Live");
+  m.scores = [{ inning: "", value: `${hs} - ${as}` }];
+  m.espnEventId = String(hit.e.id);
+  return true;
+}
+async function szFootballReconcile(matches, stats) {
+  const now = Date.now();
+  const day = (t) => new Date(t).toISOString().slice(0, 10).replace(/-/g, "");
+  const cand = matches.filter((m) => m.status !== "finished" && FOOT_COMP_SLUG[m.comp] && m.start && new Date(m.start).getTime() < now && now - new Date(m.start).getTime() < 6 * 864e5);
+  stats.candidates = cand.length;
+  const need = {};
+  for (const m of cand) {
+    if (!szFbIds(m)) { stats.unmapped = (stats.unmapped || 0) + 1; continue; }
+    const t = new Date(m.start).getTime();
+    for (const d of [day(t - 864e5), day(t)]) need[FOOT_COMP_SLUG[m.comp] + "|" + d] = 1;
+  }
+  const keys = Object.keys(need).slice(0, 40);
+  const events = {};
+  const ua = { "User-Agent": "Mozilla/5.0 (ScoreZaap)" };
+  stats.espnCalls = keys.length;
+  stats.espnOk = 0;
+  for (let i = 0; i < keys.length; i += 6) {
+    await Promise.all(keys.slice(i, i + 6).map(async (k) => {
+      const [slug, d] = k.split("|");
+      const j = await szFastJson(`${ESPN_API}/soccer/${slug}/scoreboard?dates=${d}`, ua, 20, 6000);
+      if (j && Array.isArray(j.events)) { stats.espnOk++; (events[slug] = events[slug] || []).push(...j.events); }
+    }));
+  }
+  stats.reconciled = 0;
+  stats.noMatch = 0;
+  for (const m of cand) {
+    if (!szFbIds(m)) continue;
+    const hit = szFbEspnEvent(m, events[FOOT_COMP_SLUG[m.comp]]);
+    if (!hit) { stats.noMatch++; continue; }
+    if (szFbApplyEspn(m, hit)) stats.reconciled++;
+  }
+}
+async function fetchFootball(env, stats, prev) {
+  stats = stats || {};
   const df = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
   const dt2 = new Date(Date.now() + 8 * 864e5).toISOString().slice(0, 10);
   const h2 = { "X-Auth-Token": env.FOOTBALL_DATA_KEY };
@@ -525,8 +776,9 @@ async function fetchFootball(env) {
   const batches = [FOOT_COMPS.slice(0, 5), FOOT_COMPS.slice(5)];
   for (const batch of batches) {
     const results = await Promise.all(batch.map(
-      (c) => fetch(`${FOOT_API}/competitions/${c}/matches?dateFrom=${df}&dateTo=${dt2}`, { headers: h2 }).then((r) => r.ok ? r.json() : null).catch(() => null)
+      (c) => fetch(`${FOOT_API}/competitions/${c}/matches?dateFrom=${df}&dateTo=${dt2}`, { headers: h2 }).then((r) => { stats.fdStatus = stats.fdStatus || {}; stats.fdStatus[c] = r.status; return r.ok ? r.json() : null; }).catch(() => null)
     ));
+    batch.forEach((c, ix) => { if (results[ix]) stats.fdOk = (stats.fdOk || 0) + 1; else (stats.fdFailed = stats.fdFailed || []).push(c); });
     for (const j of results) {
       for (const m of j && j.matches || []) {
         if (seenIds[m.id]) continue;
@@ -567,7 +819,12 @@ async function fetchFootball(env) {
     } catch (e) {
     }
   }
+  if (!stats.fdOk) throw new Error("football-data returned no competitions: " + JSON.stringify(stats.fdStatus || {}));
+  for (const m of prev || []) {
+    if ((stats.fdFailed || []).includes(m.comp) && !seenIds[m.id]) { seenIds[m.id] = 1; out.push(m); stats.keptFromCache = (stats.keptFromCache || 0) + 1; }
+  }
   if (!out.length) throw new Error("football-data empty across competitions");
+  await szFootballReconcile(out, stats);
   const rank = { live: 0, upcoming: 1, finished: 2 };
   return out.sort((a, b) => rank[a.status] - rank[b.status] || (a.status === "finished" ? new Date(b.start) - new Date(a.start) : new Date(a.start) - new Date(b.start)));
 }
@@ -861,16 +1118,19 @@ async function refresh(kind, env, ctx) {
   if (kind === "football") {
     try {
       const oldBlob = await kv.get("football", "json");
-      const matches = await fetchFootball(env);
-      if (!oldBlob || JSON.stringify(oldBlob.matches) !== JSON.stringify(matches)) {
+      const fbStats = env.__fbStats = {};
+      const matches = await fetchFootball(env, fbStats, oldBlob && oldBlob.matches);
+      fbStats.changed = !oldBlob || JSON.stringify(oldBlob.matches) !== JSON.stringify(matches);
+      if (fbStats.changed) {
         await kv.put("football", JSON.stringify({ at: Date.now(), matches }));
         if (env.DB) ctx.waitUntil(dbUpsertMatches(env, "football", matches));
         await detectTransitions(env, ctx, "football", oldBlob && oldBlob.matches, matches);
       }
     } catch (e) {
       console.log("football refresh failed", e.message);
+      env.__fbStats = Object.assign(env.__fbStats || {}, { failed: String(e && e.message || e).slice(0, 200) });
     }
-    return;
+    return env.__fbStats;
   }
   try {
     const sm = await kv.get("series_map", "json");
@@ -1440,7 +1700,21 @@ async function espnSoccerTimeline(env, detail) {
     const hit = /* @__PURE__ */ __name22222222((n) => names.some((x) => x.split("|").some((y) => y && n && (n.includes(y) || y.includes(n)))), "hit");
     return hit(hn) && hit(an);
   }, "matchTeams");
-  const ev = (sb.events || []).find(matchTeams);
+  let ev = null;
+  if (detail.espnEventId) ev = (sb.events || []).find((e) => String(e.id) === String(detail.espnEventId)) || null;
+  if (!ev) {
+    const idsH = FOOT_TEAM_ID[detail.home], idsA = FOOT_TEAM_ID[detail.away];
+    if (idsH && idsA) {
+      const hits = (sb.events || []).filter((e) => {
+        const cs = ((e.competitions || [])[0] || {}).competitors || [];
+        const eh = cs.find((x) => x.homeAway === "home"), ea = cs.find((x) => x.homeAway === "away");
+        return eh && ea && String(eh.team && eh.team.id) === String(idsH) && String(ea.team && ea.team.id) === String(idsA);
+      });
+      ev = hits.length === 1 ? hits[0] : null;
+    } else {
+      ev = (sb.events || []).find(matchTeams) || null;
+    }
+  }
   if (!ev) return null;
   const sumKey = "espn_sum_" + ev.id;
   let sum = await env.SPORTS_KV.get(sumKey, "json");
@@ -4649,7 +4923,9 @@ var index_default = {
         const v = await szAutoGet(env, "cron_debug_" + k);
         if (v) dbgs[k] = v;
       }
-      return json({ version: SZ_AUTO_VERSION, ...h, cron_debug: dbgs, state: age > 45 * 6e4 ? "stalled" : h?.errors?.length ? "degraded" : "ok", ...age > 45 * 6e4 ? { note: "News job has not completed for 45+ minutes; check for Cloudflare CPU-limit kills" } : {} }, age > 45 * 6e4 ? 503 : 200, { "Cache-Control": "no-store" });
+      const fbd = dbgs.football, fbAge = fbd && fbd.at ? Date.now() - Date.parse(fbd.at) : Infinity;
+      const fbBad = !fbd || fbd.stage === "error" || !!(fbd.info && fbd.info.failed) || fbAge > 65 * 6e4;
+      return json({ version: SZ_AUTO_VERSION, ...h, cron_debug: dbgs, football_ok: !fbBad, state: age > 45 * 6e4 ? "stalled" : h?.errors?.length || fbBad ? "degraded" : "ok", ...age > 45 * 6e4 ? { note: "News job has not completed for 45+ minutes; check for Cloudflare CPU-limit kills" } : {} }, age > 45 * 6e4 ? 503 : 200, { "Cache-Control": "no-store" });
     }
     if (path === "/blog/scoreboard-notebook") {
       const page2 = szNotebookPage(await szAutoGet(env, "notebook"));
@@ -5495,13 +5771,24 @@ if (lm2 && lm2.status === "live") {
               matchday: m.matchday,
               halfTime: sc.halfTime && sc.halfTime.home !== null ? `${sc.halfTime.home} - ${sc.halfTime.away}` : null,
               fullTime: sc.fullTime && sc.fullTime.home !== null ? `${sc.fullTime.home} - ${sc.fullTime.away}` : null,
-              winner: sc.winner && sc.winner !== "DRAW" ? sc.winner : sc.winner === "DRAW" ? "Draw" : null,
+              winner: sc.winner === "HOME_TEAM" ? m.homeTeam?.name || "Home" : sc.winner === "AWAY_TEAM" ? m.awayTeam?.name || "Away" : sc.winner === "DRAW" ? "Draw" : sc.winner || null,
               home: m.homeTeam?.name,
               away: m.awayTeam?.name,
               homeCrest: m.homeTeam?.crest,
               awayCrest: m.awayTeam?.crest
             };
             if (env.SPORTS_KV) await env.SPORTS_KV.put(fkey, JSON.stringify(fdetail), { expirationTtl: 60 });
+          }
+          try {
+            const fl0 = env.SPORTS_KV ? await env.SPORTS_KV.get("football", "json") : null;
+            const lm0 = fl0 && Array.isArray(fl0.matches) ? fl0.matches.find((x) => x.id === id && x.espnEventId) : null;
+            if (lm0 && (lm0.status === "finished" || lm0.status === "live") && lm0.scores && lm0.scores[0]) {
+              const sv = lm0.scores[0].value, pr = String(sv).split("-").map((x) => parseInt(x, 10));
+              fdetail = { ...fdetail, status: lm0.status === "finished" ? "FINISHED" : "IN_PLAY", fullTime: sv, espnEventId: lm0.espnEventId };
+              if (lm0.status === "finished" && pr.length === 2 && !pr.some(isNaN)) fdetail.winner = pr[0] > pr[1] ? fdetail.home : pr[1] > pr[0] ? fdetail.away : "Draw";
+              else if (lm0.status === "live") fdetail.winner = null;
+            }
+          } catch (e) {
           }
           const tl = await espnSoccerTimeline(env, fdetail).catch(() => null);
           return json({ sport, detail: fdetail, timeline: tl ? tl.timeline : null, commentary: tl ? tl.commentary : null, stats: tl ? tl.stats : null });
@@ -5667,9 +5954,9 @@ ${snapshot}${liveSc}` },
     const footballCron = cron === "1,21,41 * * * *";
     const slot = Math.round(new Date(event.scheduledTime).getUTCMinutes() / 5) % 4;
     const name = footballCron ? "football" : slot === 0 ? "scores" : slot === 2 ? "news" : "enrich";
-    const dbg = /* @__PURE__ */ __name(async (stage, err) => {
+    const dbg = /* @__PURE__ */ __name(async (stage, err, info) => {
       try {
-        await env.DB.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind("cron_debug_" + name, JSON.stringify({ cron, slot, stage, at: (/* @__PURE__ */ new Date()).toISOString(), ms: Date.now() - t0, err: err ? String(err.message || err).slice(0, 300) : null }), (/* @__PURE__ */ new Date()).toISOString()).run();
+        await env.DB.prepare("INSERT INTO sz_automation (id,value,updated_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at").bind("cron_debug_" + name, JSON.stringify({ cron, slot, stage, at: (/* @__PURE__ */ new Date()).toISOString(), ms: Date.now() - t0, err: err ? String(err.message || err).slice(0, 300) : null, ...info && typeof info === "object" ? { info } : {} }), (/* @__PURE__ */ new Date()).toISOString()).run();
       } catch (e) {
       }
     }, "dbg");
@@ -5677,8 +5964,8 @@ ${snapshot}${liveSc}` },
     ctx.waitUntil((async () => {
       await dbg("start");
       try {
-        await job();
-        await dbg("done");
+        const info = await job();
+        await dbg("done", null, info);
       } catch (e) {
         await dbg("error", e);
       }
