@@ -5757,7 +5757,24 @@ if (lm2 && lm2.status === "live") {
           let fdetail = fcached;
           if (!fdetail) {
             const r = await fetch(`${FOOT_API}/matches/${id}`, { headers: { "X-Auth-Token": env.FOOTBALL_DATA_KEY || "" } });
-            if (!r.ok) return json({ error: "no detail from upstream" }, 502);
+            if (!r.ok) {
+              // provider rate limit or outage: fall back to the cached list entry instead of an error page
+              const flb = env.SPORTS_KV ? await env.SPORTS_KV.get("football", "json").catch(() => null) : null;
+              const lmb = flb && Array.isArray(flb.matches) ? flb.matches.find((x) => x.id === String(id)) : null;
+              if (!lmb) return json({ error: "no detail from upstream" }, 502);
+              const sv = lmb.scores && lmb.scores[0] ? lmb.scores[0].value : null;
+              const pr = sv ? String(sv).split("-").map((x) => parseInt(x, 10)) : [];
+              const fin = lmb.status === "finished";
+              const fb2 = {
+                title: lmb.title, status: fin ? "FINISHED" : lmb.status === "live" ? "IN_PLAY" : "TIMED", venue: lmb.venue || null, date: lmb.start,
+                competition: lmb.matchType, emblem: null, stage: "", matchday: null, halfTime: null,
+                fullTime: lmb.status !== "upcoming" ? sv : null,
+                winner: fin && pr.length === 2 && !pr.some(isNaN) ? (pr[0] > pr[1] ? lmb.home.name : pr[1] > pr[0] ? lmb.away.name : "Draw") : null,
+                home: lmb.home.name, away: lmb.away.name, homeCrest: lmb.home.logo, awayCrest: lmb.away.logo, espnLeague: lmb.espnLeague || null
+              };
+              const tlb = await espnSoccerTimeline(env, { ...fb2, espnEventId: lmb.espnEventId }).catch(() => null);
+              return json({ sport, detail: fb2, timeline: tlb ? tlb.timeline : null, commentary: tlb ? tlb.commentary : null, stats: tlb ? tlb.stats : null });
+            }
             const m = await r.json();
             const sc = m.score || {};
             fdetail = {
