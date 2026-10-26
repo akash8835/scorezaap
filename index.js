@@ -5223,6 +5223,27 @@ var index_default = {
           if (kv) await kv.put("ser_f_" + id, JSON.stringify(cached), { expirationTtl: 6 * 3600 });
         }
         const rank = { live: 0, upcoming: 1, finished: 2 };
+        cached = { ...cached, matches: (cached.matches || []).map((x) => ({ ...x })) };
+        try {
+          // keep league pages consistent with the reconciled Football list
+          const flist = await readKV(env2, "football", { matches: [] });
+          const byId = {};
+          for (const x of flist.matches || []) byId[x.id] = x;
+          const rest = [];
+          for (const x of cached.matches) {
+            const lm = byId[x.id];
+            if (lm && lm.espnEventId && lm.status !== "upcoming" && x.status !== "finished") {
+              x.status = lm.status; x.statusText = lm.statusText; x.scores = lm.scores; x.espnEventId = lm.espnEventId;
+            } else if (!lm && x.status !== "finished") {
+              rest.push(x);
+            }
+          }
+          if (rest.length) {
+            rest.forEach((x) => { x.comp = id; });
+            await szFootballReconcile(rest.slice(0, 20), {});
+          }
+        } catch (e) {
+        }
         const ms = (cached.matches || []).sort((a, b) => rank[a.status] - rank[b.status] || new Date(a.start) - new Date(b.start));
         return { kind, name: cached.name, emblem: cached.emblem, sub: "Season standings & fixtures", standingsType: "football", tables: cached.tables, fixtures: ms.filter((m) => m.status !== "finished").slice(0, 12), results: ms.filter((m) => m.status === "finished").slice(-10).reverse() };
       }
