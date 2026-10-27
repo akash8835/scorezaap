@@ -1,3 +1,39 @@
+// Live detail must never regress to an older fallback scorecard.
+function szCricketProgress(innings) {
+  return (innings || []).map((i) => {
+    const raw = String(i.overs ?? i.o ?? "");
+    const m = /^(\d+)(?:\.(\d))?$/.exec(raw);
+    return { runs: Number(i.runs ?? i.r), wkts: Number(i.wkts ?? i.w),
+      balls: m ? Number(m[1]) * 6 + Number(m[2] || 0) : null };
+  });
+}
+function szOlderCricketInnings(candidate, reference) {
+  const a = szCricketProgress(candidate), b = szCricketProgress(reference);
+  if (!a.length || !b.length) return false;
+  if (a.length !== b.length) return a.length < b.length;
+  const x = a[a.length - 1], y = b[b.length - 1];
+  if (x.balls != null && y.balls != null && x.balls !== y.balls) return x.balls < y.balls;
+  return Number.isFinite(x.runs) && Number.isFinite(y.runs) && x.runs < y.runs ||
+    Number.isFinite(x.wkts) && Number.isFinite(y.wkts) && x.wkts < y.wkts;
+}
+function szListCricketInnings(match) {
+  return (match && match.scores || []).map((s) => {
+    const m = /^(\d+)\/(\d+)\s*\((\d+(?:\.\d)?)\)$/.exec(String(s.value || ""));
+    return m ? { inning: s.inning || "", r: +m[1], w: +m[2], o: m[3] } : null;
+  }).filter(Boolean);
+}
+function szAiFailureKind(error) {
+  const text = String(error && error.message || "").toLowerCase();
+  if (/daily|allocation|neurons|quota/.test(text)) return "quota";
+  if (/capacity|busy/.test(text)) return "capacity";
+  if (/timeout|timed out|aborted/.test(text)) return "timeout";
+  return "inference_error";
+}
+function szLogAiFailure(error) {
+  // Never log prompts, responses, request bodies, raw error text or credentials.
+  console.error(JSON.stringify({ event: "zaap_ai_failure", kind: szAiFailureKind(error),
+    code: /^[0-9]{3,5}$/.test(String(error && error.code || "")) ? String(error.code) : null }));
+}
 // KV quota fix: TTL caches and request bookkeeping use existing D1.
 const SZ_STORE_REV = "kv-d1-20261004";
 const szWrappedEnvs = new WeakMap();
@@ -5653,10 +5689,24 @@ var index_default = {
             }
           }
           const liveNow = cached.started && !cached.ended;
-          const [scorecard, comm] = await Promise.all([
+          let [scorecard, comm] = await Promise.all([
             cbzScorecard(env, id, cached.title, cached.date, liveNow).catch(() => null),
             liveNow || cached.ended ? cbzCommentary(env, id, cached.title, cached.date, liveNow).catch(() => null) : null
           ]);
+          let scorecardStale = false;
+          if (liveNow && scorecard && Array.isArray(scorecard.innings)) {
+            let reference = cached.innings || [];
+            const latestList = env.SPORTS_KV ? await env.SPORTS_KV.get("cricket", "json").catch(() => null) : null;
+            const latestMatch = latestList && Array.isArray(latestList.matches) ? latestList.matches.find((m) => m.id === id) : null;
+            const listInnings = szListCricketInnings(latestMatch);
+            if (latestMatch && latestMatch.status === "live" && (!reference.length || szOlderCricketInnings(reference, listInnings))) reference = listInnings;
+            if (szOlderCricketInnings(scorecard.innings, reference)) {
+              // Keep known newer totals; do not combine old batting/bowling figures with them.
+              cached = { ...cached, innings: reference };
+              scorecard = null;
+              scorecardStale = true;
+            }
+          }
           if (scorecard && Array.isArray(scorecard.innings) && scorecard.innings.length) {
             cached = { ...cached, status: scorecard.status || cached.status, ended: !!scorecard.complete, started: true, innings: scorecard.innings.map((i) => ({ inning: i.team, r: i.runs, w: i.wkts, o: i.overs })) };
           }
@@ -5720,7 +5770,7 @@ if (lm2 && lm2.status === "live") {
             }
           } catch (e) {
           }
-          return json({ sport, detail: cached, squads: squads || null, scorecard, commentary: comm ? comm.list : null, graphs });
+          return json({ sport, detail: cached, squads: squads || null, scorecard, scorecardStale, commentary: comm ? comm.list : null, graphs });
         }
         if (sport === "football" && id.startsWith("soccer/")) {
           const colon = id.indexOf(":");
@@ -5890,6 +5940,7 @@ ${snapshot}${liveSc}` },
         const ai = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", { messages, max_tokens: 400 });
         return json({ reply: (ai.response || "").trim() || "No words. Try again?" });
       } catch (e) {
+        szLogAiFailure(e);
         return json({ error: "Zaap is busy right now. Try again in a bit." }, 503);
       }
     }
