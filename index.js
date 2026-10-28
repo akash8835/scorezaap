@@ -239,9 +239,21 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
   const liveC = (c2.matches || []).filter((m) => String(m.id).startsWith("cbz_") && m.status !== "finished" && (!m.start || new Date(m.start).getTime() <= now)).slice(0, 12);
   for (const m of liveC) {
     jobs.push((async () => {
-      const d = await szFastJson("https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4), cua, 3, 2500);
-      const s = d ? cbzMiniScorecard(d) : null;
+      const miniUrl = "https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4);
+      let d = await szFastJson(miniUrl, cua, 3, 2500);
+      let s = d ? cbzMiniScorecard(d) : null;
+      if (!s) {
+        d = await szFastJson(miniUrl, cua, 1, 2500);
+        s = d ? cbzMiniScorecard(d) : null;
+      }
+      // Never let an older source reading replace a newer saved score.
+      if (s && Array.isArray(s.innings) && szOlderCricketInnings(s.innings, szListCricketInnings(m))) s = null;
+      if (!s && m.status === "live") {
+        m.scoreDelayed = true;
+        console.error(JSON.stringify({ event: "score_overlay_unverified", sport: "cricket", id: String(m.id) }));
+      }
       if (s) {
+        delete m.scoreDelayed;
         m.celebrationVerifiedAt = Date.now();
         m.celebrationInnings = s.innings.map((i, n) => ({ key: i.team + ":" + n, team: i.team, r: i.runs, w: i.wkts, bats: (i.batsmen || []).map((b) => ({ id: b.id || b.name, name: b.name, r: b.r, f: b.f, s: b.s })) }));
         const prevText = m.statusText;
@@ -2190,7 +2202,7 @@ function teamRow(t,score){const img=t.logo?'<img src="'+esc(t.logo)+'" alt="" on
 function matchCard(m,i){
  const st=m.status==='live'?'<span class="pill live">Live</span>':m.status==='finished'?'<span class="pill fin">FT</span>':'<span class="pill up">'+esc(localTime(m.start)||'Soon')+'</span>';
  const icon='';
- const stxt=m.status==='live'&&m.statusText?'<span class="stxt">'+esc(m.statusText)+'</span>':'';
+ const stxt=(m.status==='live'&&m.statusText?'<span class="stxt">'+esc(m.statusText)+'</span>':'')+(m.status==='live'&&m.scoreDelayed?'<span class="stxt" title="Live update from the source is delayed">Score may be delayed</span>':'');
  let body='';
  if(m.sport==='cricket'&&m.scores&&m.scores.length){
    body='<div class="tm"><div class="tn">'+esc(m.home.short)+' <span style="color:var(--dim);font-weight:400">vs</span> '+esc(m.away.short)+'</div></div>'+m.scores.map(s=>'<div class="inn"><span>'+esc(s.inning||'Score')+'</span><b data-ts>'+esc(s.value)+'</b></div>').join('');
