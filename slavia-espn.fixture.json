@@ -1,0 +1,40 @@
+{
+  "id": "401915381",
+  "date": "2026-11-04T20:00Z",
+  "competitions": [
+    {
+      "status": {
+        "clock": 3600.0,
+        "displayClock": "60'",
+        "period": 2,
+        "type": {
+          "id": "26",
+          "name": "STATUS_SECOND_HALF",
+          "state": "in",
+          "completed": false,
+          "description": "Second Half",
+          "detail": "60'",
+          "shortDetail": "60'"
+        }
+      },
+      "competitors": [
+        {
+          "homeAway": "home",
+          "score": "0",
+          "team": {
+            "id": "494",
+            "displayName": "Slavia Prague"
+          }
+        },
+        {
+          "homeAway": "away",
+          "score": "2",
+          "team": {
+            "id": "359",
+            "displayName": "Arsenal"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -230,13 +230,21 @@ async function szFastJson(url, headers, ttl, ms) {
 }
 __name(szFastJson, "szFastJson");
 __name2(szFastJson, "szFastJson");
+// Multi-day matches remain live overnight, but their unchanged stumps scores
+// do not need detail parsing on every visitor request. The scheduled match-list
+// refresh restores normal overlay polling as soon as the next day starts.
+function szCricketNeedsOverlay(m, now = Date.now()) {
+  return String(m.id).startsWith("cbz_") && m.status !== "finished" &&
+    (!m.start || new Date(m.start).getTime() <= now) &&
+    !/\bstumps\b/i.test(String(m.statusText || ""));
+}
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
   const started = /* @__PURE__ */ __name2((m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5, "started");
   const jobs = [];
   [...c2.matches || [], ...f2.matches || [], ...Object.values(espnBlobs).flatMap((b) => b.matches || [])].forEach((m) => delete m.celebrationVerifiedAt);
   const cua = { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "application/json" };
-  const liveC = (c2.matches || []).filter((m) => String(m.id).startsWith("cbz_") && m.status !== "finished" && (!m.start || new Date(m.start).getTime() <= now)).slice(0, 12);
+  const liveC = (c2.matches || []).filter((m) => szCricketNeedsOverlay(m, now)).slice(0, 12);
   for (const m of liveC) {
     jobs.push((async () => {
       const miniUrl = "https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4);
@@ -708,6 +716,7 @@ var FOOT_TEAM_ID = {
  "SC Freiburg": 126,
  "SC Heerenveen": 146,
  "SC Internacional": 1936,
+ "SK Slavia Praha": 494,
  "SC Paderborn 07": 3307,
  "SE Palmeiras": 2029,
  "SS Lazio": 112,
@@ -5099,7 +5108,7 @@ var index_default = {
         readKV(env, "espn_f1", { matches: [] })
       ]);
       try {
-        const liveCbz = c2.matches.filter((m) => String(m.id).startsWith("cbz_") && m.status !== "finished" && (!m.start || new Date(m.start).getTime() <= Date.now())).slice(0, 6);
+        const liveCbz = c2.matches.filter((m) => szCricketNeedsOverlay(m)).slice(0, 6);
         for (const m of liveCbz) {
           const tapKey = "tap_v3_" + m.id;
           const lastTap = env.SPORTS_KV ? await env.SPORTS_KV.get(tapKey) : null;

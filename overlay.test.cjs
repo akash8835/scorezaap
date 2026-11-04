@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const src=fs.readFileSync('index.js','utf8');
 const head=src.slice(0,src.indexOf('// KV quota fix:'));
-const a=src.indexOf('async function szLiveOverlay'),b=src.indexOf('__name(szLiveOverlay');
+const a=src.indexOf('function szCricketNeedsOverlay'),b=src.indexOf('__name(szLiveOverlay');
 const fn=src.slice(a,b);
 function mk(script){
   const logs=[],calls=[];
