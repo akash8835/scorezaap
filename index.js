@@ -4455,6 +4455,17 @@ async function szMatchRun(env, nowMs = Date.now()) {
       if (!result.sampleSlug && post.created) result.sampleSlug = post.slug;
     } catch (e) { console.log('match article write failed', String(e.message || e).slice(0, 120)); }
   }
+  // Verify recorded posts against the latest finished readings and repair any
+  // published from a bad snapshot (watch transitions alone miss recoveries).
+  for (const item of valid) {
+    if (item.status !== 'finished' || completed.has(item.key)) continue;
+    const facts = szMatchFacts(item.spec, item.entry.match, item.entry.at, nowMs);
+    if (!facts) continue;
+    try {
+      const post = await szMatchGetPost(env, facts.key);
+      if (post && (await szMatchReconcilePost(env, facts, post))) result.reconciled = (result.reconciled || 0) + 1;
+    } catch (e) { console.log('match article reconcile failed', String(e.message || e).slice(0, 120)); }
+  }
   const updateRows = valid.filter((x) => (!x.before || x.before.status !== x.status) && (!x.watchCandidate || completed.has(x.key)));
   await szMatchPersistStates(env, updateRows, nowMs);
   await szAutoPut(env, 'match_post_watch_v1', { initialized_at: new Date(nowMs).toISOString(), last_run: new Date(nowMs).toISOString() });
