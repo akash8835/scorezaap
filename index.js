@@ -4146,6 +4146,7 @@ async function szDailyPublish(env, nowMs = Date.now()) {
     const id = String(m?.id || '');
     const startAt = Date.parse(m?.start || '');
     if (!id || seen.has(id) || localSeen.has(id) || String(m?.status || '').toLowerCase() !== 'finished' || !Number.isFinite(startAt) || startAt < earliest || startAt > nowMs + 5 * 6e4) continue;
+    if (!szMatchStatusConclusive(spec.sport, m.statusText)) continue;
     const scores = Array.isArray(m.scores) ? m.scores.map((s) => [s?.inning ? String(s.inning).slice(0, 40) + ': ' : '', String(s?.value || '').slice(0, 100)].join('')).filter((s) => s.replace(/^[^:]+:\s*/, '').trim()) : [];
     if (!scores.length && m.homeScore != null && m.awayScore != null) scores.push(String(m.homeScore).slice(0, 32) + ' - ' + String(m.awayScore).slice(0, 32));
     if (!scores.length) continue;
@@ -4253,6 +4254,20 @@ function szMatchDateTime(iso) {
   return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }).format(d) : '';
 }
 __name(szMatchDateTime, 'szMatchDateTime');
+// A finished flag alone is not proof of a result: cricket feeds can flip a
+// match to finished during an innings break or a data glitch, which once made
+// this job publish a mid-match score as the final. Require result-like wording
+// for cricket, and never publish break/toss/session text for any sport.
+var SZ_MATCH_INPROGRESS_TEXT = /\bbreak\b|stumps|\btoss\b|opt(?:ed)?\s+to\b|trails?\s+by|leads?\s+by|needs?\s+\d+\s+runs?|session|\bday\s+\d|\brain\b|delay(?:ed)?|in\s+progress|yet\s+to\s+bat/i;
+var SZ_MATCH_RESULT_TEXT = /won|wins?\s+by|drawn|draw|tied|\btie\b|no\s+result|abandon|concede|walkover|forfeit|final|full[\s-]?time|\bft\b|complete|finished|ended/i;
+function szMatchStatusConclusive(sport, statusText) {
+  const t = String(statusText || '').trim();
+  if (SZ_MATCH_INPROGRESS_TEXT.test(t)) return false;
+  if (!t) return sport !== 'cricket';
+  if (sport === 'cricket') return SZ_MATCH_RESULT_TEXT.test(t);
+  return true;
+}
+__name(szMatchStatusConclusive, 'szMatchStatusConclusive');
 function szMatchFacts(spec, match, snapshotAt, nowMs) {
   const id = String(match?.id || '');
   const startAt = Date.parse(match?.start || '');
@@ -4263,6 +4278,7 @@ function szMatchFacts(spec, match, snapshotAt, nowMs) {
   if (!scores.length && match.homeScore != null && match.awayScore != null) scores.push({ inning: '', value: String(match.homeScore).slice(0, 60) + ' - ' + String(match.awayScore).slice(0, 60) });
   if (!scores.length && Array.isArray(match.resultRows)) scores.push(...match.resultRows.filter((r) => Number.isInteger(Number(r?.place)) && r?.driver).slice(0, 5).map((r) => ({ inning: 'P' + Number(r.place), value: String(r.driver).replace(/\s+/g, ' ').trim().slice(0, 80) })));
   if (!scores.length) return null;
+  if (!szMatchStatusConclusive(spec.sport, match.statusText)) return null;
   const finalStatus = String(match.statusText || 'Finished').replace(/\s+/g, ' ').trim().slice(0, 180);
   const snapshotMs = Number(snapshotAt);
   if (!Number.isFinite(snapshotMs) || nowMs - snapshotMs > 60 * 6e4 || snapshotMs > nowMs + 5 * 6e4) return null;
@@ -4295,6 +4311,18 @@ async function szMatchCreatePost(env, facts, nowMs) {
   return { ...row, created: Number(insert?.meta?.changes || 0) > 0 };
 }
 __name(szMatchCreatePost, 'szMatchCreatePost');
+async function szMatchReconcilePost(env, facts, post) {
+  let old;
+  try { old = JSON.parse(post.result_json || '{}'); } catch (e) { return false; }
+  if (String(old.final_status || '') === String(facts.final_status || '') && JSON.stringify(old.scores || []) === JSON.stringify(facts.scores || [])) return false;
+  const scoreText = facts.scores.map((x) => [x.inning, x.value].filter(Boolean).join(': ')).join('; ');
+  const description = (facts.sport_label + ' final: ' + scoreText + '. ' + facts.final_status + '. Recorded from ScoreZaap’s fresh scoreboard snapshot.').slice(0, 158);
+  await env.DB.prepare(`UPDATE sz_match_posts SET description=?, result_json=?, source_updated_at=? WHERE match_id=?`).bind(description, JSON.stringify({ ...facts }), facts.source_snapshot, facts.key).run();
+  console.log('match article reconciled', facts.key);
+  return true;
+}
+__name(szMatchReconcilePost, 'szMatchReconcilePost');
+
 function szMatchArticlePage(post) {
   let facts;
   try { facts = JSON.parse(post.result_json || '{}'); } catch (e) { return null; }
@@ -4403,6 +4431,10 @@ async function szMatchRun(env, nowMs = Date.now()) {
       const post = await szMatchCreatePost(env, item.facts, nowMs);
       completed.add(item.key);
       if (post.created) result.created++;
+      if (!post.created) {
+        try { if (await szMatchReconcilePost(env, item.facts, post)) result.reconciled = (result.reconciled || 0) + 1; }
+        catch (e) { console.log('match article reconcile failed', String(e.message || e).slice(0, 120)); }
+      }
       if (!result.sampleSlug && post.created) result.sampleSlug = post.slug;
     } catch (e) { console.log('match article write failed', String(e.message || e).slice(0, 120)); }
   }
@@ -4918,6 +4950,7 @@ async function szAutoRun(env) {
       const matchRun = await szMatchRun(env, Date.now());
       h.match_article_last_success = new Date().toISOString();
       h.match_article_posts_created = matchRun.created;
+      h.match_article_reconciled = matchRun.reconciled || 0;
       h.match_article_sample_slug = matchRun.sampleSlug;
       h.match_article_pending = matchRun.pending;
       h.match_article_state = matchRun.initialized ? "baseline_initialized" : matchRun.pending ? "published_or_queued" : "checked";
