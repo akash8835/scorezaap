@@ -244,7 +244,7 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
   const jobs = [];
   [...c2.matches || [], ...f2.matches || [], ...Object.values(espnBlobs).flatMap((b) => b.matches || [])].forEach((m) => delete m.celebrationVerifiedAt);
   const cua = { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", "Accept": "application/json" };
-  const liveC = (c2.matches || []).filter((m) => szCricketNeedsOverlay(m, now)).slice(0, 12);
+  const liveC = (c2.matches || []).filter((m) => szCricketNeedsOverlay(m, now)).sort((a, b) => String(b.start || "").localeCompare(String(a.start || ""))).slice(0, 12);
   for (const m of liveC) {
     jobs.push((async () => {
       const miniUrl = "https://m.cricbuzz.com/api/mcenter/scorecard/" + String(m.id).slice(4);
@@ -1254,7 +1254,7 @@ async function refresh(kind, env, ctx) {
       }
     }
     if (cricket && cricket.length) {
-      for (const lm of cricket.filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= Date.now())).slice(0, 8)) {
+      for (const lm of cricket.filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= Date.now())).sort((a, b) => String(b.start || "").localeCompare(String(a.start || ""))).slice(0, 8)) {
         try {
           const better = /* @__PURE__ */ __name222222((cur2, idx2, val2) => {
             const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
@@ -1292,6 +1292,23 @@ async function refresh(kind, env, ctx) {
         }
       }
       const oldBlob = await kv.get("cricket", "json");
+      // A stale upstream list reading must not move a live score backwards -
+      // the same rule the request overlay already applies to detail fetches.
+      try {
+        const oldById = {};
+        for (const om of (oldBlob && oldBlob.matches) || []) oldById[String(om.id)] = om;
+        for (const nm of cricket) {
+          if (nm.status === "finished") continue;
+          const om = oldById[String(nm.id)];
+          if (!om || !Array.isArray(om.scores) || !om.scores.length || !Array.isArray(nm.scores)) continue;
+          const nInn = szListCricketInnings(nm), oInn = szListCricketInnings(om);
+          if ((oInn.length && !nInn.length) || szOlderCricketInnings(nInn, oInn)) {
+            nm.scores = om.scores;
+            if (om.statusText) nm.statusText = om.statusText;
+          }
+        }
+      } catch (e) {
+      }
       if (!oldBlob || JSON.stringify(oldBlob.matches) !== JSON.stringify(cricket)) {
         await kv.put("cricket", JSON.stringify({ at: Date.now(), matches: cricket }));
         if (env.DB) ctx.waitUntil(dbUpsertMatches(env, "cricket", cricket));
@@ -5141,7 +5158,7 @@ var index_default = {
         readKV(env, "espn_f1", { matches: [] })
       ]);
       try {
-        const liveCbz = c2.matches.filter((m) => szCricketNeedsOverlay(m)).slice(0, 6);
+        const liveCbz = c2.matches.filter((m) => szCricketNeedsOverlay(m)).sort((a, b) => String(b.start || "").localeCompare(String(a.start || ""))).slice(0, 6);
         for (const m of liveCbz) {
           const tapKey = "tap_v3_" + m.id;
           const lastTap = env.SPORTS_KV ? await env.SPORTS_KV.get(tapKey) : null;
