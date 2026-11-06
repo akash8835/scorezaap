@@ -540,7 +540,18 @@ function dedupeCricket(list) {
       const cn = czMatchNo(c);
       if (no && cn && no !== cn) return false;
       const ct = toMs(c.start);
-      return isNaN(t) || isNaN(ct) ? true : Math.abs(ct - t) < 12 * 36e5;
+      if (isNaN(t) || isNaN(ct)) return true;
+      if (Math.abs(ct - t) < 12 * 36e5) return true;
+      // Same fixture despite a corrupted/offset provider start date (seen:
+      // cricapi dateTimeGMT a day off): identical series + identical match
+      // number + compatible match type, dates no more than a full Test apart.
+      const seriesOf = (x) => String(x && x.series || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const ms = seriesOf(m), cs = seriesOf(c);
+      if (!ms || !cs || ms !== cs) return false;
+      if (!no || !cn || no !== cn) return false;
+      const mtM = String(m.matchType || "").toUpperCase(), mtC = String(c.matchType || "").toUpperCase();
+      if (mtM && mtC && mtM !== mtC) return false;
+      return Math.abs(ct - t) <= 5 * 24 * 36e5;
     });
     if (dup) continue;
     seenIds.add(String(m.id));
