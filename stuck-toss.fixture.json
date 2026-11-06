@@ -1,0 +1,93 @@
+{
+ "raw_toss_stuck": {
+  "scoreCard": [],
+  "matchHeader": {
+   "matchId": 173587,
+   "matchDescription": "Super Eights",
+   "matchFormat": "T20",
+   "matchType": "league",
+   "complete": false,
+   "domestic": false,
+   "matchStartTimestamp": 1793894400000,
+   "matchCompleteTimestamp": 1793905200000,
+   "dayNight": false,
+   "year": 2026,
+   "state": "Toss",
+   "status": "Boland opt to bat",
+   "tossResults": {
+    "tossWinnerId": 1759,
+    "tossWinnerName": "Boland",
+    "decision": "Batting"
+   },
+   "result": {},
+   "revisedTarget": {},
+   "playersOfTheMatch": [],
+   "playersOfTheSeries": [],
+   "isMatchNotCovered": false,
+   "team1": {
+    "id": 155,
+    "name": "Warriors",
+    "playerDetails": [],
+    "shortName": "WAR"
+   },
+   "team2": {
+    "id": 1759,
+    "name": "Boland",
+    "playerDetails": [],
+    "shortName": "BOL"
+   },
+   "seriesDesc": "CSA T20 Challenge 2026",
+   "venue": {
+    "id": 73,
+    "name": "St George's Park",
+    "city": "Gqeberha",
+    "country": "South Africa",
+    "timezone": "+02:00",
+    "latitude": "-33.966545",
+    "longitude": "25.610332"
+   },
+   "seriesId": 13180,
+   "seriesName": "CSA T20 Challenge 2026",
+   "alertType": "auto",
+   "livestreamEnabled": false
+  },
+  "status": "",
+  "videos": [],
+  "responseLastUpdated": 1793959185,
+  "matchComplete": false,
+  "isMatchComplete": false
+ },
+ "raw_in_progress": {
+  "scoreCard": [
+   {
+    "inningsId": 1,
+    "batTeamDetails": {
+     "batTeamName": "Boland"
+    },
+    "scoreDetails": {
+     "runs": 10,
+     "wickets": 0,
+     "overs": 2,
+     "runRate": 5
+    }
+   }
+  ],
+  "matchHeader": {
+   "matchId": 1,
+   "state": "In Progress",
+   "status": "Boland 10/0"
+  },
+  "isMatchComplete": false,
+  "matchComplete": false
+ },
+ "raw_preview": {
+  "scoreCard": [],
+  "matchHeader": {
+   "matchId": 2,
+   "state": "Preview",
+   "status": "Match starts soon"
+  },
+  "isMatchComplete": false,
+  "matchComplete": false
+ }
+}

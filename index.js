@@ -238,6 +238,15 @@ function szCricketNeedsOverlay(m, now = Date.now()) {
     (!m.start || new Date(m.start).getTime() <= now) &&
     !/\bstumps\b/i.test(String(m.statusText || ""));
 }
+// Provider data can freeze at the toss stage for a match that is long over.
+// Past the format's normal full length with no innings recorded, the cron
+// stops treating it as live so a stale card cannot sit at the top.
+function szCricketStuckAfterMs(matchType) {
+  const t = String(matchType || "").toUpperCase();
+  if (t === "TEST") return 30 * 36e5;
+  if (t === "ODI") return 12 * 36e5;
+  return 6 * 36e5;
+}
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
   const started = /* @__PURE__ */ __name2((m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5, "started");
@@ -1233,6 +1242,7 @@ async function refresh(kind, env, ctx) {
         console.log("cricket cbz slice refreshed:", fb.length, "matches");
       }
     }
+    const cricRaw = Array.isArray(cricket) ? cricket : [];
     if (cbzSlice && cbzSlice.matches && cbzSlice.matches.length) {
       cricket = dedupeCricket((cbzSlice.matches || []).concat(cricket || []));
       const rank2 = { live: 0, upcoming: 1, finished: 2 };
@@ -1265,9 +1275,32 @@ async function refresh(kind, env, ctx) {
             const eRuns = +ex[1], eOv = +ex[3];
             return cOv > eOv || cOv === eOv && cRuns > eRuns;
           }, "better");
-          const sc2 = String(lm.id).startsWith("cbz_") ? await cbzMiniScorecardFetch(String(lm.id).slice(4)).catch(() => null) : await kv.get("sc_c_" + lm.id, "json").catch(() => null);
+          const raw2 = String(lm.id).startsWith("cbz_") ? await cbzMiniJson(String(lm.id).slice(4), "scorecard").catch(() => null) : null;
+          const sc2 = String(lm.id).startsWith("cbz_") ? (raw2 ? cbzMiniScorecard(raw2) : null) : await kv.get("sc_c_" + lm.id, "json").catch(() => null);
           if (sc2 && Array.isArray(sc2.innings) && sc2.innings.length) {
             applyMiniScore(lm, sc2);
+            continue;
+          }
+          // Provider stuck at the toss long past the match's normal length:
+          // adopt the cricapi reading of the same fixture when it has one,
+          // otherwise mark the match finished so it leaves the Live section.
+          const stuckState = String(raw2 && raw2.matchHeader && raw2.matchHeader.state || "");
+          const stuckStart = lm.start ? Date.parse(lm.start) : NaN;
+          if (!sc2 && /^(toss|preview)$/i.test(stuckState) && Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType)) {
+            const alt = cricRaw.find((x) => x && x.status === "finished" && czFixtureTeams(x) === czFixtureTeams(lm) && Array.isArray(x.scores) && x.scores.length);
+            if (alt) {
+              lm.status = "finished";
+              lm.statusText = alt.statusText || "Match finished";
+              lm.scores = alt.scores;
+              delete lm.scoreDelayed;
+              console.log("cricket stuck-toss corrected via cricapi:", String(lm.id));
+            } else {
+              lm.status = "finished";
+              lm.statusText = "Result not updated by source";
+              lm.scoreDelayed = true;
+              lm.noResultNotify = true;
+              console.log("cricket stuck-toss marked finished without verified result:", String(lm.id));
+            }
             continue;
           }
           const acc2 = await kv.get("ovr_" + lm.id, "json").catch(() => null);
@@ -1463,6 +1496,7 @@ async function detectTransitions(env, ctx, sport, oldList, newList) {
   for (const m of newList) {
     const was = prev[String(m.id)];
     if (!was) continue;
+    if (m.noResultNotify) continue;
     if (was !== "live" && m.status === "live") await notifyMatch(env, ctx, sport, m, "live");
     else if (was !== "finished" && m.status === "finished") await notifyMatch(env, ctx, sport, m, "result");
   }
