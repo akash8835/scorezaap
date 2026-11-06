@@ -29,8 +29,8 @@ async function run({lm,raw,cricRaw=[]}){
 }
 (async()=>{
   // thresholds
-  assert.equal(c.szCricketStuckAfterMs('T20'),6*36e5);assert.equal(c.szCricketStuckAfterMs('ODI'),12*36e5);
-  assert.equal(c.szCricketStuckAfterMs('TEST'),30*36e5);assert.equal(c.szCricketStuckAfterMs(''),6*36e5);n++;
+  assert.equal(c.szCricketStuckAfterMs('T20'),8*36e5);assert.equal(c.szCricketStuckAfterMs('ODI'),14*36e5);
+  assert.equal(c.szCricketStuckAfterMs('TEST'),54*36e5);assert.equal(c.szCricketStuckAfterMs(''),8*36e5);n++;
   // 1 the real stuck match: Toss 18h past start, no cricapi duplicate -> finished placeholder
   let m={id:'cbz_173587',status:'live',statusText:'Boland opt to bat',scores:[],matchType:'T20',
     home:{name:'Boland',short:'BOL'},away:{name:'Warriors',short:'WAR'},

@@ -239,13 +239,18 @@ function szCricketNeedsOverlay(m, now = Date.now()) {
     !/\bstumps\b/i.test(String(m.statusText || ""));
 }
 // Provider data can freeze at the toss stage for a match that is long over.
-// Past the format's normal full length with no innings recorded, the cron
-// stops treating it as live so a stale card cannot sit at the top.
+// Well past the format's full length with no innings recorded and the source
+// still saying Toss/Preview, the cron stops treating it as live so a stale
+// card cannot sit at the top. Thresholds carry slack for delayed starts:
+// T20 ~2h max rain delay + ~4h play (8h), ODI ~5h + ~9h (14h), Tests two
+// fully washed days at the toss (54h). Once play begins the state leaves
+// Toss, and a rescheduled match arrives with a new start time, so neither
+// can trip this; only a source that stopped updating can.
 function szCricketStuckAfterMs(matchType) {
   const t = String(matchType || "").toUpperCase();
-  if (t === "TEST") return 30 * 36e5;
-  if (t === "ODI") return 12 * 36e5;
-  return 6 * 36e5;
+  if (t === "TEST") return 54 * 36e5;
+  if (t === "ODI") return 14 * 36e5;
+  return 8 * 36e5;
 }
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
