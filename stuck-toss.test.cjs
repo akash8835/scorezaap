@@ -20,6 +20,9 @@ vm.runInContext(sliceFn('szCricketStuckAfterMs','async function szLiveOverlay'),
 vm.runInContext(sliceFn('czTeamKey','function czFixtureTeams'),c);
 vm.runInContext(sliceFn('czFixtureTeams','function czMatchNo'),c);
 vm.runInContext(sliceFn('cbzMiniScorecard','async function cbzMiniScorecardFetch'),c);
+vm.runInContext(sliceFn('szMatchStatusConclusive','function szMatchFacts'),c);
+c.SZ_MATCH_INPROGRESS_TEXT=/\bbreak\b|stumps|\btoss\b|opt(?:ed)?\s+to\b|trails?\s+by|leads?\s+by|needs?\s+\d+\s+runs?|session|\bday\s+\d|\brain\b|delay(?:ed)?|in\s+progress|yet\s+to\s+bat/i;
+c.SZ_MATCH_RESULT_TEXT=/won|wins?\s+by|drawn|draw|tied|\btie\b|no\s+result|abandon|concede|walkover|forfeit|final|full[\s-]?time|\bft\b|complete|finished|ended/i;
 let n=0;
 async function run({lm,raw,cricRaw=[]}){
   const ctx={lm,raw2:raw,sc2:raw?c.cbzMiniScorecard(raw):null,cricRaw};
@@ -72,5 +75,14 @@ async function run({lm,raw,cricRaw=[]}){
     home:{name:'Boland'},away:{name:'Warriors'},start:new Date(Date.now()-9*36e5).toISOString()};
   m=await run({lm:m,raw:fx.raw_preview});
   assert.equal(m.status,'finished');assert.equal(m.noResultNotify,true);n++;
+  // 8 cricapi flag says finished but text is in-progress ("Innings Break") -> placeholder, not adoption
+  m={id:'cbz_173587',status:'live',statusText:'Boland opt to bat',scores:[],matchType:'T20',
+    home:{name:'Boland',short:'BOL'},away:{name:'Warriors',short:'WAR'},
+    start:new Date(Date.now()-18*36e5).toISOString()};
+  const lag={status:'finished',statusText:'Innings Break',home:{name:'Warriors'},away:{name:'Boland'},
+    scores:[{inning:'BOL 1',value:'138/5 (20)'}]};
+  m=await run({lm:m,raw:fx.raw_toss_stuck,cricRaw:[lag]});
+  assert.equal(m.status,'finished');assert.equal(m.statusText,'Result not updated by source');
+  assert.equal(m.scores.length,0);assert.equal(m.noResultNotify,true);n++;
   console.log(n+' stuck-toss guard tests passed');
 })().catch(e=>{console.error(e);process.exit(1)});

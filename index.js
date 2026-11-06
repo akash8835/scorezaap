@@ -1287,12 +1287,14 @@ async function refresh(kind, env, ctx) {
             continue;
           }
           // Provider stuck at the toss long past the match's normal length:
-          // adopt the cricapi reading of the same fixture when it has one,
-          // otherwise mark the match finished so it leaves the Live section.
+          // adopt the cricapi reading of the same fixture only when it carries
+          // a conclusive result (an in-progress flag like "Innings Break" is
+          // not a result), otherwise mark the match finished with an honest
+          // placeholder so it leaves the Live section.
           const stuckState = String(raw2 && raw2.matchHeader && raw2.matchHeader.state || "");
           const stuckStart = lm.start ? Date.parse(lm.start) : NaN;
           if (!sc2 && /^(toss|preview)$/i.test(stuckState) && Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType)) {
-            const alt = cricRaw.find((x) => x && x.status === "finished" && czFixtureTeams(x) === czFixtureTeams(lm) && Array.isArray(x.scores) && x.scores.length);
+            const alt = cricRaw.find((x) => x && x.status === "finished" && czFixtureTeams(x) === czFixtureTeams(lm) && Array.isArray(x.scores) && x.scores.length && szMatchStatusConclusive("cricket", x.statusText));
             if (alt) {
               lm.status = "finished";
               lm.statusText = alt.statusText || "Match finished";
