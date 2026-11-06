@@ -1289,8 +1289,10 @@ async function refresh(kind, env, ctx) {
           // Provider stuck at the toss long past the match's normal length:
           // adopt the cricapi reading of the same fixture only when it carries
           // a conclusive result (an in-progress flag like "Innings Break" is
-          // not a result), otherwise mark the match finished with an honest
-          // placeholder so it leaves the Live section.
+          // not a result). Without a verified result the match is NOT claimed
+          // finished - elapsed time never proves completion (postponements,
+          // abandoned games). It stays in its source bucket, clearly labelled
+          // stale, and keeps polling so it self-corrects when the feed revives.
           const stuckState = String(raw2 && raw2.matchHeader && raw2.matchHeader.state || "");
           const stuckStart = lm.start ? Date.parse(lm.start) : NaN;
           if (!sc2 && /^(toss|preview)$/i.test(stuckState) && Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType)) {
@@ -1302,11 +1304,10 @@ async function refresh(kind, env, ctx) {
               delete lm.scoreDelayed;
               console.log("cricket stuck-toss corrected via cricapi:", String(lm.id));
             } else {
-              lm.status = "finished";
-              lm.statusText = "Result not updated by source";
+              lm.feedStuck = true;
               lm.scoreDelayed = true;
-              lm.noResultNotify = true;
-              console.log("cricket stuck-toss marked finished without verified result:", String(lm.id));
+              lm.statusText = "Score feed stuck - awaiting provider update";
+              console.log("cricket stuck-toss feed stale:", String(lm.id));
             }
             continue;
           }
@@ -1339,6 +1340,7 @@ async function refresh(kind, env, ctx) {
         for (const om of (oldBlob && oldBlob.matches) || []) oldById[String(om.id)] = om;
         for (const nm of cricket) {
           if (nm.status === "finished") continue;
+          if (nm.feedStuck) continue;
           const om = oldById[String(nm.id)];
           if (!om || !Array.isArray(om.scores) || !om.scores.length || !Array.isArray(nm.scores)) continue;
           const nInn = szListCricketInnings(nm), oInn = szListCricketInnings(om);
@@ -1503,7 +1505,7 @@ async function detectTransitions(env, ctx, sport, oldList, newList) {
   for (const m of newList) {
     const was = prev[String(m.id)];
     if (!was) continue;
-    if (m.noResultNotify) continue;
+    if (m.feedStuck) continue;
     if (was !== "live" && m.status === "live") await notifyMatch(env, ctx, sport, m, "live");
     else if (was !== "finished" && m.status === "finished") await notifyMatch(env, ctx, sport, m, "result");
   }

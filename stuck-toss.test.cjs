@@ -34,13 +34,13 @@ async function run({lm,raw,cricRaw=[]}){
   // thresholds
   assert.equal(c.szCricketStuckAfterMs('T20'),8*36e5);assert.equal(c.szCricketStuckAfterMs('ODI'),14*36e5);
   assert.equal(c.szCricketStuckAfterMs('TEST'),54*36e5);assert.equal(c.szCricketStuckAfterMs(''),8*36e5);n++;
-  // 1 the real stuck match: Toss 18h past start, no cricapi duplicate -> finished placeholder
+  // 1 the real stuck match: Toss 18h past start, no cricapi duplicate -> stays live, labelled stale
   let m={id:'cbz_173587',status:'live',statusText:'Boland opt to bat',scores:[],matchType:'T20',
     home:{name:'Boland',short:'BOL'},away:{name:'Warriors',short:'WAR'},
     start:new Date(Date.now()-18*36e5).toISOString()};
   m=await run({lm:m,raw:fx.raw_toss_stuck});
-  assert.equal(m.status,'finished');assert.equal(m.statusText,'Result not updated by source');
-  assert.equal(m.scoreDelayed,true);assert.equal(m.noResultNotify,true);n++;
+  assert.equal(m.status,'live');assert.equal(m.statusText,'Score feed stuck - awaiting provider update');
+  assert.equal(m.scoreDelayed,true);assert.equal(m.feedStuck,true);n++;
   // 2 same stuck match but cricapi has the verified result -> adopt it
   m={id:'cbz_173587',status:'live',statusText:'Boland opt to bat',scores:[],matchType:'T20',
     home:{name:'Boland',short:'BOL'},away:{name:'Warriors',short:'WAR'},
@@ -74,7 +74,7 @@ async function run({lm,raw,cricRaw=[]}){
   m={id:'cbz_13',status:'live',statusText:'Match starts soon',scores:[],matchType:'T20',
     home:{name:'Boland'},away:{name:'Warriors'},start:new Date(Date.now()-9*36e5).toISOString()};
   m=await run({lm:m,raw:fx.raw_preview});
-  assert.equal(m.status,'finished');assert.equal(m.noResultNotify,true);n++;
+  assert.equal(m.status,'live');assert.equal(m.feedStuck,true);n++;
   // 8 cricapi flag says finished but text is in-progress ("Innings Break") -> placeholder, not adoption
   m={id:'cbz_173587',status:'live',statusText:'Boland opt to bat',scores:[],matchType:'T20',
     home:{name:'Boland',short:'BOL'},away:{name:'Warriors',short:'WAR'},
@@ -82,7 +82,7 @@ async function run({lm,raw,cricRaw=[]}){
   const lag={status:'finished',statusText:'Innings Break',home:{name:'Warriors'},away:{name:'Boland'},
     scores:[{inning:'BOL 1',value:'138/5 (20)'}]};
   m=await run({lm:m,raw:fx.raw_toss_stuck,cricRaw:[lag]});
-  assert.equal(m.status,'finished');assert.equal(m.statusText,'Result not updated by source');
-  assert.equal(m.scores.length,0);assert.equal(m.noResultNotify,true);n++;
+  assert.equal(m.status,'live');assert.equal(m.statusText,'Score feed stuck - awaiting provider update');
+  assert.equal(m.scores.length,0);assert.equal(m.feedStuck,true);n++;
   console.log(n+' stuck-toss guard tests passed');
 })().catch(e=>{console.error(e);process.exit(1)});
