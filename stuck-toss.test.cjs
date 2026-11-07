@@ -84,5 +84,22 @@ async function run({lm,raw,cricRaw=[]}){
   m=await run({lm:m,raw:fx.raw_toss_stuck,cricRaw:[lag]});
   assert.equal(m.status,'live');assert.equal(m.statusText,'Score feed stuck - awaiting provider update');
   assert.equal(m.scores.length,0);assert.equal(m.feedStuck,true);n++;
+  // 9 no cricapi reading but a hand-verified manual result exists -> adopt it
+  c.SZ_MANUAL_CRICKET_RESULTS.cbz_test_manual={start:new Date(Date.now()-18*36e5).toISOString(),
+    statusText:'South Western Districts won by 19 runs',
+    scores:[{inning:'SWD 1',value:'169/5 (20)'},{inning:'BOL 1',value:'150/7 (20)'}]};
+  m={id:'cbz_test_manual',status:'live',statusText:'Boland opt to field',scores:[],matchType:'T20',
+    home:{name:'South Western Districts'},away:{name:'Boland'},
+    start:new Date(Date.now()-18*36e5).toISOString(),scoreDelayed:true};
+  m=await run({lm:m,raw:fx.raw_toss_stuck});
+  assert.equal(m.status,'finished');assert.equal(m.statusText,'South Western Districts won by 19 runs');
+  assert.equal(m.scores.length,2);assert.ok(!('scoreDelayed' in m));assert.ok(!m.feedStuck);n++;
+  // 10 expired manual entry (start >10d ago) -> ignored, stays stale
+  c.SZ_MANUAL_CRICKET_RESULTS.cbz_test_old={start:new Date(Date.now()-30*24*36e5).toISOString(),
+    statusText:'X won by 1 run',scores:[{inning:'X 1',value:'100/0 (20)'}]};
+  m={id:'cbz_test_old',status:'live',statusText:'Y opt to bat',scores:[],matchType:'T20',
+    home:{name:'X'},away:{name:'Y'},start:new Date(Date.now()-30*24*36e5).toISOString()};
+  m=await run({lm:m,raw:fx.raw_toss_stuck});
+  assert.equal(m.status,'live');assert.equal(m.feedStuck,true);n++;
   console.log(n+' stuck-toss guard tests passed');
 })().catch(e=>{console.error(e);process.exit(1)});

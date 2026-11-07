@@ -270,6 +270,31 @@ function szCricketStuckAfterMs(matchType) {
   if (t === "ODI") return 14 * 36e5;
   return 8 * 36e5;
 }
+// Hand-verified results for matches no free provider kept covering. An entry
+// is added only after the final result is confirmed against two independent
+// live sources, and it expires 10 days after the match start so the table
+// cannot grow stale. The stuck-feed branch adopts it exactly like a
+// conclusive cricapi reading of the same fixture.
+var SZ_MANUAL_CRICKET_RESULTS = {
+  // SWD vs Boland, Super Eights, CSA T20 Challenge 2026 (Paarl, 7 Nov 2026):
+  // Cricbuzz froze at the toss and cricapi does not carry this series.
+  // Result verified against SuperSport and MyKhel scorecards.
+  cbz_174276: {
+    start: "2026-11-07T11:00:00.000Z",
+    statusText: "South Western Districts won by 19 runs",
+    scores: [
+      { inning: "SWD 1", value: "169/5 (20)" },
+      { inning: "BOL 1", value: "150/7 (20)" }
+    ]
+  }
+};
+function szManualCricketResult(id) {
+  const r = SZ_MANUAL_CRICKET_RESULTS[String(id)];
+  if (!r) return null;
+  const t0 = Date.parse(r.start || "");
+  if (!Number.isFinite(t0) || Date.now() < t0 || Date.now() - t0 > 10 * 24 * 36e5) return null;
+  return r;
+}
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
   const started = /* @__PURE__ */ __name2((m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5, "started");
@@ -1348,12 +1373,20 @@ async function refresh(kind, env, ctx) {
           const stuckStart = lm.start ? Date.parse(lm.start) : NaN;
           if (!sc2 && /^(toss|preview)$/i.test(stuckState) && Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType)) {
             const alt = cricRaw.find((x) => x && x.status === "finished" && czFixtureTeams(x) === czFixtureTeams(lm) && Array.isArray(x.scores) && x.scores.length && szMatchStatusConclusive("cricket", x.statusText));
+            const manual = szManualCricketResult(lm.id);
             if (alt) {
               lm.status = "finished";
               lm.statusText = alt.statusText || "Match finished";
               lm.scores = alt.scores;
               delete lm.scoreDelayed;
               console.log("cricket stuck-toss corrected via cricapi:", String(lm.id));
+            } else if (manual) {
+              lm.status = "finished";
+              lm.statusText = manual.statusText;
+              lm.scores = manual.scores.map((s) => ({ ...s }));
+              delete lm.scoreDelayed;
+              delete lm.feedStuck;
+              console.log("cricket stuck-toss corrected via verified manual result:", String(lm.id));
             } else {
               lm.feedStuck = true;
               lm.scoreDelayed = true;
@@ -5817,6 +5850,14 @@ var index_default = {
               ended: !!(d && d.ismatchcomplete) || !!(lm && lm.status === "finished"),
               innings: inn.map((x) => ({ inning: x.batteamname, r: x.score, w: x.wickets, o: x.overs }))
             };
+            // Finished in the list with a verified result but no provider
+            // scorecard: still show the final innings lines on the detail page.
+            if (!cached.innings.length && lm && lm.status === "finished" && Array.isArray(lm.scores)) {
+              cached.innings = lm.scores.map((s) => {
+                const pm = /^(\d+)\/(\d+)\s*\((\d+\.?\d*)\)$/.exec(String(s && s.value || ""));
+                return pm ? { inning: s.inning || "", r: +pm[1], w: +pm[2], o: +pm[3] } : null;
+              }).filter(Boolean);
+            }
             if (cached && (!cached.innings || !cached.innings.length)) {
               const s3 = await cbzHtmlScore(id.slice(4)).catch(() => null);
               if (s3 && s3.scores && s3.scores.length) {
