@@ -45,6 +45,7 @@ const payload={typeMatches:[{seriesMatches:[{seriesAdWrapper:{matches:[
 ]}}]}]};
 const c2=vm.createContext({CBZ_IMG:'img/',__name2222222:f=>f,szCbzListOvers:f,
   cbzFreeList:async()=>payload,cbzFetch:async()=>null});
+vm.runInContext(src.slice(src.indexOf('function szRepairSplicedName'),src.indexOf('__name(szRepairSplicedName')),c2);
 vm.runInContext(sliceFn('fetchCricketCbz','__name(fetchCricketCbz'),c2);
 (async()=>{
  const out=await c2.fetchCricketCbz({});

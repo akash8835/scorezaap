@@ -452,6 +452,26 @@ async function cbzFreeList() {
 }
 __name(cbzFreeList, "cbzFreeList");
 __name2(cbzFreeList, "cbzFreeList");
+// Upstream feeds occasionally paste a series or match name into the middle of
+// itself ("India A tour of NeIndia A tour of New Zealand, 2026w Zealand, 2026"
+// = S[:18] + S + S[18:], seen live on the Cricbuzz list feed 2026-11-07). That
+// shape is exactly S[:k] + S + S[k:] with the splice inside a word, so the
+// string is 2|S| long. When the splice is unambiguous, restore S; genuine
+// repeated names splice between words and pass through untouched.
+function szRepairSplicedName(s) {
+  const str = String(s || "");
+  const n = str.length;
+  if (n < 24 || n % 2 !== 0) return str;
+  const half = n / 2;
+  for (let k = 1; k < half; k++) {
+    const cand = str.slice(k, k + half);
+    if (str.slice(0, k) !== cand.slice(0, k) || str.slice(k + half) !== cand.slice(k)) continue;
+    if (/[A-Za-z]/.test(str[k - 1]) && /[A-Za-z]/.test(str[k])) return cand;
+  }
+  return str;
+}
+__name(szRepairSplicedName, "szRepairSplicedName");
+__name2(szRepairSplicedName, "szRepairSplicedName");
 async function fetchCricketCbz(env) {
   let live = await cbzFreeList().catch(() => null);
   let up = null;
@@ -485,10 +505,11 @@ async function fetchCricketCbz(env) {
           pushInn(t1.teamSName || "T1", ms.team1Score);
           pushInn(t2.teamSName || "T2", ms.team2Score);
           const vi = mi.venueInfo || {};
+          const seriesName = szRepairSplicedName(mi.seriesName);
           out.push({
             id: "cbz_" + mid,
             sport: "cricket",
-            title: (t1.teamName || "") + " vs " + (t2.teamName || "") + (mi.matchDesc ? ", " + mi.matchDesc : "") + (mi.seriesName ? ", " + mi.seriesName : ""),
+            title: (t1.teamName || "") + " vs " + (t2.teamName || "") + (mi.matchDesc ? ", " + mi.matchDesc : "") + (seriesName ? ", " + seriesName : ""),
             home: { name: t1.teamName || "", short: (t1.teamSName || "").slice(0, 8), logo: t1.imageId ? CBZ_IMG + t1.imageId + "/i.jpg" : null },
             away: { name: t2.teamName || "", short: (t2.teamSName || "").slice(0, 8), logo: t2.imageId ? CBZ_IMG + t2.imageId + "/i.jpg" : null },
             status: isLive ? "live" : isFin ? "finished" : "upcoming",
@@ -497,7 +518,7 @@ async function fetchCricketCbz(env) {
             venue: vi.ground ? vi.ground + (vi.city ? ", " + vi.city : "") : null,
             start: mi.startDate ? (/* @__PURE__ */ new Date(+mi.startDate)).toISOString() : null,
             matchType: (mi.matchFormat || "").toUpperCase(),
-            series: mi.seriesName || null
+            series: seriesName || null
           });
         }
       }
@@ -586,10 +607,11 @@ async function fetchCricket(env) {
   const out = [];
   for (const m of j.data || []) {
     const scores = (m.score || []).map((x) => ({ inning: (x.inning || "").replace(/ Inning.*$/, ""), value: `${x.r}/${x.w} (${x.o})` }));
+    const nm = szRepairSplicedName(m.name);
     out.push({
       id: m.id,
       sport: "cricket",
-      title: m.name,
+      title: nm,
       home: { name: m.teams?.[0] || "", short: (m.teamInfo?.[0]?.shortname || m.teams?.[0] || "").slice(0, 8), logo: m.teamInfo?.[0]?.img },
       away: { name: m.teams?.[1] || "", short: (m.teamInfo?.[1]?.shortname || m.teams?.[1] || "").slice(0, 8), logo: m.teamInfo?.[1]?.img },
       status: m.matchEnded ? "finished" : m.matchStarted ? "live" : "upcoming",
@@ -598,7 +620,7 @@ async function fetchCricket(env) {
       venue: m.venue,
       start: m.dateTimeGMT,
       matchType: (m.matchType || "").toUpperCase(),
-      series: (String(m.name || "").split(",").length > 2 ? String(m.name || "").split(",").slice(2).join(",").trim() : null) || null
+      series: (String(nm || "").split(",").length > 2 ? String(nm || "").split(",").slice(2).join(",").trim() : null) || null
     });
   }
   const rank = { live: 0, upcoming: 1, finished: 2 };
