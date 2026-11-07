@@ -1384,9 +1384,13 @@ async function refresh(kind, env, ctx) {
           // stale, and keeps polling so it self-corrects when the feed revives.
           const stuckState = String(raw2 && raw2.matchHeader && raw2.matchHeader.state || "");
           const stuckStart = lm.start ? Date.parse(lm.start) : NaN;
-          if (!sc2 && /^(toss|preview)$/i.test(stuckState) && Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType)) {
+          const manual = szManualCricketResult(lm.id);
+          // A hand-verified manual result is itself the verification, so it
+          // applies as soon as the provider sits at Toss/Preview; every other
+          // fixture still needs the full elapsed-time threshold.
+          const stuckTooLong = Number.isFinite(stuckStart) && Date.now() - stuckStart > szCricketStuckAfterMs(lm.matchType);
+          if (!sc2 && /^(toss|preview)$/i.test(stuckState) && (stuckTooLong || manual)) {
             const alt = cricRaw.find((x) => x && x.status === "finished" && czFixtureTeams(x) === czFixtureTeams(lm) && Array.isArray(x.scores) && x.scores.length && szMatchStatusConclusive("cricket", x.statusText));
-            const manual = szManualCricketResult(lm.id);
             if (alt) {
               lm.status = "finished";
               lm.statusText = alt.statusText || "Match finished";

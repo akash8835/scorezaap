@@ -101,5 +101,21 @@ async function run({lm,raw,cricRaw=[]}){
     home:{name:'X'},away:{name:'Y'},start:new Date(Date.now()-30*24*36e5).toISOString()};
   m=await run({lm:m,raw:fx.raw_toss_stuck});
   assert.equal(m.status,'live');assert.equal(m.feedStuck,true);n++;
+  // 11 manual result applies immediately, below the elapsed-time threshold
+  c.SZ_MANUAL_CRICKET_RESULTS.cbz_test_early={start:new Date(Date.now()-2*36e5).toISOString(),
+    statusText:'Western Province won by 9 runs',
+    scores:[{inning:'WPR 1',value:'178/9 (20)'},{inning:'LIONS 1',value:'169/6 (20)'}]};
+  m={id:'cbz_test_early',status:'live',statusText:'Lions opt to bowl',scores:[],matchType:'T20',
+    home:{name:'Western Province'},away:{name:'Lions'},
+    start:new Date(Date.now()-2*36e5).toISOString()};
+  m=await run({lm:m,raw:fx.raw_toss_stuck});
+  assert.equal(m.status,'finished');assert.equal(m.statusText,'Western Province won by 9 runs');
+  assert.equal(m.scores.length,2);assert.ok(!m.feedStuck);n++;
+  // 12 same early fixture without a manual entry -> untouched (threshold intact)
+  m={id:'cbz_test_noentry',status:'live',statusText:'Lions opt to bowl',scores:[],matchType:'T20',
+    home:{name:'Western Province'},away:{name:'Lions'},
+    start:new Date(Date.now()-2*36e5).toISOString()};
+  m=await run({lm:m,raw:fx.raw_toss_stuck});
+  assert.equal(m.status,'live');assert.equal(m.statusText,'Lions opt to bowl');n++;
   console.log(n+' stuck-toss guard tests passed');
 })().catch(e=>{console.error(e);process.exit(1)});
