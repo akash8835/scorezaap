@@ -1,4 +1,22 @@
 // Live detail must never regress to an older fallback scorecard.
+// Cricbuzz's list feed counts the ball that finishes an over as ".6"
+// (6.6 = 7 overs, 79.6 = 80). Normalize only that exact shape; standard
+// N.1-N.5 fractions, plain integers and anything malformed pass through.
+function szCbzListOvers(o) {
+  const m = /^(\d+)\.6$/.exec(String(o == null ? "" : o));
+  return m ? String(+m[1] + 1) : o;
+}
+// The request overlay skips matches at stumps to save overnight work, so this
+// cron pass is their only revalidation: it is what lets a stumps card see the
+// next day start. Keep every stumps match in the work list even when more
+// than eight matches are live, instead of letting it age out of the slice.
+function szCronMiniWorklist(matches, now = Date.now()) {
+  const pool = (matches || []).filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= now))
+    .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")));
+  const work = pool.slice(0, 8);
+  for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || ""))) work.push(x);
+  return work;
+}
 function szCricketProgress(innings) {
   return (innings || []).map((i) => {
     const raw = String(i.overs ?? i.o ?? "");
@@ -461,7 +479,7 @@ async function fetchCricketCbz(env) {
           const pushInn = /* @__PURE__ */ __name2222222((sname, inn) => {
             ["inngs1", "inngs2"].forEach((k, i) => {
               const x = inn && inn[k];
-              if (x && x.runs != null) scores.push({ inning: sname + " " + (i + 1), value: x.runs + "/" + (x.wickets != null ? x.wickets : 0) + " (" + x.overs + ")" });
+              if (x && x.runs != null) scores.push({ inning: sname + " " + (i + 1), value: x.runs + "/" + (x.wickets != null ? x.wickets : 0) + " (" + szCbzListOvers(x.overs) + ")" });
             });
           }, "pushInn");
           pushInn(t1.teamSName || "T1", ms.team1Score);
@@ -1280,7 +1298,7 @@ async function refresh(kind, env, ctx) {
       }
     }
     if (cricket && cricket.length) {
-      for (const lm of cricket.filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= Date.now())).sort((a, b) => String(b.start || "").localeCompare(String(a.start || ""))).slice(0, 8)) {
+      for (const lm of szCronMiniWorklist(cricket)) {
         try {
           const better = /* @__PURE__ */ __name222222((cur2, idx2, val2) => {
             const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
