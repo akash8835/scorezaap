@@ -286,6 +286,19 @@ var SZ_MANUAL_CRICKET_RESULTS = {
       { inning: "SWD 1", value: "169/5 (20)" },
       { inning: "BOL 1", value: "150/7 (20)" }
     ]
+  },
+  // Western Province vs Lions, Super Eights, CSA T20 Challenge 2026
+  // (Newlands, 7 Nov 2026): Cricbuzz froze at the toss and cricapi does not
+  // carry this series. WP innings confirmed by ESPN and CREX (Lions chase
+  // tracked to 155/6 off 18.5); final score and result confirmed by
+  // Cricprism and Scores24. Toss: Lions chose to field.
+  cbz_174284: {
+    start: "2026-11-07T16:00:00.000Z",
+    statusText: "Western Province won by 9 runs",
+    scores: [
+      { inning: "WPR 1", value: "178/9 (20)" },
+      { inning: "LIONS 1", value: "169/6 (20)" }
+    ]
   }
 };
 function szManualCricketResult(id) {
