@@ -3350,7 +3350,7 @@ function fowBlock(inn){
 }
 function cricScorecard(d){
  if(!SCARD||!SCARD.innings||!SCARD.innings.length){
-  const note=SCARD?'<div class="note">Scorecard will appear once play begins.</div>':'<div class="note">Full scorecard for this match is not available yet. Innings totals above are live.</div>';
+  const note=SCARD?'<div class="note">Scorecard will appear once play begins.</div>':(d.ended?'<div class="note">Full scorecard for this match is not available from the score provider. Final innings totals are shown above.</div>':'<div class="note">Full scorecard for this match is not available yet. Innings totals above are live.</div>');
   const fallback=(d.innings&&d.innings.length)?'<div class="inncard" style="padding:14px 16px">'+d.innings.map(i=>'<div style="padding:7px 0;display:flex;justify-content:space-between"><span style="color:var(--dim);font-size:13px">'+esc(i.inning)+'</span><b class="innscore" style="font-size:18px">'+esc(String(i.r))+'/'+esc(String(i.w))+'<small>'+esc(String(i.o))+' ov</small></b></div>').join('')+'</div>':'';
   return '<div class="pane">'+fallback+note+'</div>';
  }
