@@ -3682,7 +3682,11 @@ function applyHtmlScore(lm, s, matchType) {
     if (ov == null) return;
     let idx = cur.findIndex((c) => c && c.inning && c.inning.indexOf(sc.team) === 0);
     if (idx < 0) idx = innIdx;
-    const label = cur[idx] && cur[idx].inning ? cur[idx].inning : sc.team + " " + (idx + 1);
+    // A new row is labelled by the batting side's own innings count (matching
+    // applyMiniScore and the list feed), never by the match slot: the slot is
+    // the innings order in the match, so a chasing side in slot 2 would be
+    // mislabelled "TEAM 2" and the same chase would display twice.
+    const label = cur[idx] && cur[idx].inning ? cur[idx].inning : sc.team + " " + (cur.filter((c) => c && c.inning && c.inning.indexOf(sc.team) === 0).length + 1);
     const val = sc.runs + "/" + sc.wkts + " (" + ov + ")";
     if (betterScore(cur, idx, val)) {
       cur[idx] = { inning: label, value: val };
