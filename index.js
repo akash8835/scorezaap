@@ -367,6 +367,21 @@ var SZ_MANUAL_CRICKET_RESULTS = {
   // does not carry this series. Verified against the SuperSport match report
   // and the CricTracker scorecard: Warriors 206/4 (20), Eastern Storm 186/7
   // (20), Warriors won by 20 runs.
+  // Ireland A vs Zimbabwe A, 1st unofficial Test (Harare Sports Club, 5-8 Nov
+  // 2026): Cricbuzz never flipped the match to complete and its status text
+  // says "won by 216 runs", but 730 - 518 = 212. Verified against
+  // cricketeurope.com (Zimbabwe A all out 257, Gwandu failed to bat, won by
+  // 212 runs) and the Irish Independent match report (212-run victory).
+  cbz_175811: {
+    start: "2026-11-05T08:00:00.000Z",
+    statusText: "Ireland A won by 212 runs",
+    scores: [
+      { inning: "IREA 1", value: "424/10 (93.1)" },
+      { inning: "ZIMA 1", value: "261/10 (80)" },
+      { inning: "IREA 2", value: "306/6 (71)" },
+      { inning: "ZIMA 2", value: "257/10 (65.4)" }
+    ]
+  },
   cbz_174285: {
     start: "2026-11-08T08:00:00.000Z",
     statusText: "Warriors won by 20 runs",
