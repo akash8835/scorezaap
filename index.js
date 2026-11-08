@@ -361,6 +361,19 @@ var SZ_MANUAL_CRICKET_RESULTS = {
       { inning: "WPR 1", value: "178/9 (20)" },
       { inning: "LIONS 1", value: "169/6 (20)" }
     ]
+  },
+  // Warriors vs Eastern Storm, Super Eights, CSA T20 Challenge 2026
+  // (Willowmoore Park, Benoni, 8 Nov 2026): Cricbuzz feed stuck and cricapi
+  // does not carry this series. Verified against the SuperSport match report
+  // and the CricTracker scorecard: Warriors 206/4 (20), Eastern Storm 186/7
+  // (20), Warriors won by 20 runs.
+  cbz_174285: {
+    start: "2026-11-08T08:00:00.000Z",
+    statusText: "Warriors won by 20 runs",
+    scores: [
+      { inning: "WAR 1", value: "206/4 (20)" },
+      { inning: "ESTORM 1", value: "186/7 (20)" }
+    ]
   }
 };
 function szManualCricketResult(id) {
