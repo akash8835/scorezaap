@@ -400,6 +400,30 @@ function szManualCricketResult(id) {
   if (!Number.isFinite(t0) || Date.now() < t0 || Date.now() - t0 > 10 * 24 * 36e5) return null;
   return r;
 }
+// A hand-verified result stays the final word even after the provider flips
+// the match to complete: Cricbuzz closed cbz_175811 with "won by 216 runs"
+// when the innings it carries (424+306 vs 261+257) give 212, and because a
+// finished match leaves the cron worklist, every plain list refresh
+// re-asserted the wrong margin over the verified one. An entry exists only
+// after two independent sources confirmed the result, so no single-provider
+// reading - list or scorecard, complete or not - may overwrite it while the
+// entry is live. Applied after every list assembly so the writer and the
+// order it ran in no longer matter.
+function szApplyManualCricketResults(matches) {
+  let changed = false;
+  for (const m of matches || []) {
+    const r = m ? szManualCricketResult(m.id) : null;
+    if (!r) continue;
+    const scores = r.scores.map((s) => ({ ...s }));
+    if (m.status !== "finished" || m.statusText !== r.statusText || JSON.stringify(m.scores) !== JSON.stringify(scores)) changed = true;
+    m.status = "finished";
+    m.statusText = r.statusText;
+    m.scores = scores;
+    delete m.scoreDelayed;
+    delete m.feedStuck;
+  }
+  return changed;
+}
 async function szLiveOverlay(c2, f2, espnBlobs) {
   const now = Date.now();
   const started = /* @__PURE__ */ __name2((m) => m.status === "live" || m.status === "upcoming" && m.start && new Date(m.start).getTime() <= now && now - new Date(m.start).getTime() < 6 * 36e5, "started");
@@ -1547,6 +1571,9 @@ async function refresh(kind, env, ctx) {
         const clean = szCleanCricketScores(nm.scores, nm.matchType);
         if (clean !== nm.scores) nm.scores = clean;
       }
+      // Hand-verified results outrank every provider writer above, including
+      // a provider list or scorecard that completed with a wrong margin.
+      szApplyManualCricketResults(cricket);
       const oldBlob = await kv.get("cricket", "json");
       // A stale upstream list reading must not move a live score backwards -
       // the same rule the request overlay already applies to detail fetches.
@@ -5465,6 +5492,12 @@ var index_default = {
         c2.matches = dedupeCricket(c2.matches);
       } catch (e) {
       }
+      // Serve hand-verified results even while a KV write still carries the
+      // provider's contradicting reading of the same finished match.
+      try {
+        szApplyManualCricketResults(c2.matches);
+      } catch (e) {
+      }
       let liveAt = null;
       try {
         liveAt = await szLiveOverlay(c2, f2, { nba: nba2, mlb: mlb2, nhl: nhl2, tennis: tennis2, f1: f12 });
@@ -6094,6 +6127,8 @@ var index_default = {
           try {
             if (env.SPORTS_KV && scorecard && Array.isArray(scorecard.innings) && scorecard.innings.length) {
               const cl = await env.SPORTS_KV.get("cricket", "json").catch(() => null);
+              // A hand-verified result outranks a stale list reading here too.
+              if (cl && Array.isArray(cl.matches)) szApplyManualCricketResults(cl.matches);
               const lm2 = cl && Array.isArray(cl.matches) ? cl.matches.find((m) => m.id === id) : null;
               if (lm2 && lm2.status === "finished" && Array.isArray(lm2.scores) && lm2.scores.length) {
   const finalInnings = lm2.scores.map((s) => {
