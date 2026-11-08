@@ -16,7 +16,7 @@ function szCronMiniWorklist(matches, now = Date.now()) {
   const work = pool.slice(0, 8);
   // A hand-verified result must always reach the worklist, even when newer
   // fixtures crowd the match out of the first eight (cbz_175811 never did).
-  for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || "")) || szManualCricketResult(x.id)) work.push(x);
+  for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || "")) || typeof szManualCricketResult === "function" && szManualCricketResult(x.id)) work.push(x);
   return work;
 }
 function szCricketTeamKey(t, fallback) {
