@@ -323,10 +323,16 @@ function szCricketStuckAfterMs(matchType) {
 // Hand-verified results for matches no free provider kept covering. An entry
 // is added only after the final result is confirmed against two independent
 // live sources, and it expires 10 days after the match start so the table
-// cannot grow stale. An entry may set "until" (ISO timestamp) to stay live
-// longer when the provider still broadcasts the fixture with a wrong result
-// past the default window; the stuck-feed branch adopts it exactly like a
-// conclusive cricapi reading of the same fixture.
+// cannot grow stale. Two exceptions:
+// - "until" (ISO timestamp) keeps an entry live past the default window while
+//   the provider still broadcasts the fixture.
+// - "correction": true marks an entry that exists because the provider's own
+//   result was verified wrong. It never expires: the wrongness does not lapse,
+//   and while the fixture is absent from every assembled list the entry is
+//   inert, so it cannot go stale. Known-wrong provider data must never win
+//   again once two independent sources have settled the result.
+// The stuck-feed branch adopts an entry exactly like a conclusive cricapi
+// reading of the same fixture.
 var SZ_MANUAL_CRICKET_RESULTS = {
   // SWD vs Boland, Super Eights, CSA T20 Challenge 2026 (Paarl, 7 Nov 2026):
   // Cricbuzz froze at the toss and cricapi does not carry this series.
@@ -378,10 +384,13 @@ var SZ_MANUAL_CRICKET_RESULTS = {
   // 212 runs) and the Irish Independent match report (212-run victory).
   cbz_175811: {
     start: "2026-11-05T08:00:00.000Z",
-    // Cricbuzz still lists this fixture as Complete with the wrong margin
-    // weeks later, so keep the verified result pinned until it has aged out
-    // of every provider feed, not just past the default 10-day window.
-    until: "2026-12-06T00:00:00.000Z",
+    // Correction, not a coverage patch: Cricbuzz closed this match Complete
+    // with "won by 216 runs" while its own innings give 212, verified against
+    // cricketeurope.com/FINALSCORE/LATEST/FS_latest.html (Zimbabwe A all out
+    // 257) and independent.ie (Gavin Hoey report, 212-run victory). The pin
+    // never expires so the provider's known-wrong margin can never win again;
+    // it is inert once the fixture ages out of every feed.
+    correction: true,
     statusText: "Ireland A won by 212 runs",
     scores: [
       { inning: "IREA 1", value: "424/10 (93.1)" },
@@ -404,6 +413,9 @@ function szManualCricketResult(id) {
   if (!r) return null;
   const t0 = Date.parse(r.start || "");
   if (!Number.isFinite(t0) || Date.now() < t0) return null;
+  // A correction never expires: it records that the provider's own result was
+  // verified wrong, and known-wrong data must not win later.
+  if (r.correction) return r;
   const t1 = Date.parse(r.until || "");
   if (Number.isFinite(t1)) return Date.now() <= t1 ? r : null;
   if (Date.now() - t0 > 10 * 24 * 36e5) return null;
@@ -6182,6 +6194,22 @@ if (lm2 && lm2.status === "live") {
                   lm2.scores = cur;
                   await env.SPORTS_KV.put("cricket", JSON.stringify(cl));
                 }
+              }
+            }
+          } catch (e) {
+          }
+          // A hand-verified correction outranks the provider scorecard on the
+          // detail page too, including after the fixture has aged out of the
+          // list blob: wherever the site retains this match it keeps the
+          // verified result. Only the result text is pinned - the provider's
+          // innings detail below it is accurate and stays.
+          try {
+            const manualDet = szManualCricketResult(id);
+            if (manualDet) {
+              cached = { ...cached, status: manualDet.statusText, ended: true, started: true };
+              if (scorecard) {
+                scorecard.status = manualDet.statusText;
+                scorecard.complete = true;
               }
             }
           } catch (e) {

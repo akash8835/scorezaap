@@ -86,9 +86,11 @@ assert.equal(+mm[1], margin, 'status text margin contradicts innings');
 assert.equal(margin, 212);
 n++;
 
-// 6. Expiry: a past "until" retires the entry even inside the 10-day window;
-// a future "until" keeps it live past the default 10 days (the cbz_175811
-// case: provider still broadcasts the wrong margin weeks later).
+// 6. Expiry rules: a past "until" retires an entry inside the 10-day window;
+// a future "until" extends it; a "correction" entry never expires, because it
+// records that the provider's own result was verified wrong and known-wrong
+// data must not win later (the cbz_175811 case: Cricbuzz still broadcasts the
+// wrong 216 margin weeks later).
 c.SZ_MANUAL_CRICKET_RESULTS.cbz_t2exp = {
   start: new Date(Date.now() - 2 * 24 * 36e5).toISOString(),
   until: new Date(Date.now() - 36e5).toISOString(),
@@ -101,8 +103,22 @@ c.SZ_MANUAL_CRICKET_RESULTS.cbz_t3exp = {
   statusText: 'Y won by 2 runs', scores: []
 };
 assert.equal(c.szManualCricketResult('cbz_t3exp').statusText, 'Y won by 2 runs');
-// The real entry's extended pin lands after every feed has aged the fixture out.
-assert.ok(Date.parse(real.until) > Date.parse(real.start) + 10 * 24 * 36e5, 'cbz_175811 until missing or too short');
+c.SZ_MANUAL_CRICKET_RESULTS.cbz_t4cor = {
+  start: new Date(Date.now() - 400 * 24 * 36e5).toISOString(),
+  correction: true,
+  statusText: 'Z won by 3 runs', scores: []
+};
+assert.equal(c.szManualCricketResult('cbz_t4cor').statusText, 'Z won by 3 runs', 'correction must not expire');
+// A plain entry past the default window still expires.
+c.SZ_MANUAL_CRICKET_RESULTS.cbz_t5old = {
+  start: new Date(Date.now() - 20 * 24 * 36e5).toISOString(),
+  statusText: 'W won by 4 runs', scores: []
+};
+assert.equal(c.szManualCricketResult('cbz_t5old'), null);
+// The real entry is a non-expiring correction with its provenance recorded.
+assert.equal(real.correction, true, 'cbz_175811 must be a correction entry');
+assert.equal(real.until, undefined, 'correction needs no arbitrary date');
+assert.ok(c.szManualCricketResult('cbz_175811'), 'real entry must be live');
 n++;
 
 console.log('manual-result-precedence ok:', n, 'groups');
