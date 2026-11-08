@@ -292,6 +292,20 @@ var SZ_MANUAL_CRICKET_RESULTS = {
   // carry this series. WP innings confirmed by ESPN and CREX (Lions chase
   // tracked to 155/6 off 18.5); final score and result confirmed by
   // Cricprism and Scores24. Toss: Lions chose to field.
+  // West Indies A vs England Lions, 1st unofficial ODI, England Lions tour
+  // of West Indies 2026 (Warner Park, Basseterre, 7 Nov 2026): Cricbuzz froze
+  // mid-chase at 120/5 (18) and still claims "In Progress" a day later;
+  // cricapi does not carry this series. Result verified against the official
+  // windiescricket.com series page and the cricketworld.com/crictracker
+  // scorecards: Lions 240/6 (33.5) chasing a DLS target of 240 in 36 overs.
+  cbz_176496: {
+    start: "2026-11-07T18:00:00.000Z",
+    statusText: "England Lions won by 4 wickets (DLS Method)",
+    scores: [
+      { inning: "WIA 1", value: "212/8 (40)" },
+      { inning: "ENGA 1", value: "240/6 (33.5)" }
+    ]
+  },
   cbz_174284: {
     start: "2026-11-07T16:00:00.000Z",
     statusText: "Western Province won by 9 runs",
@@ -1371,6 +1385,22 @@ async function refresh(kind, env, ctx) {
           }, "better");
           const raw2 = String(lm.id).startsWith("cbz_") ? await cbzMiniJson(String(lm.id).slice(4), "scorecard").catch(() => null) : null;
           const sc2 = String(lm.id).startsWith("cbz_") ? (raw2 ? cbzMiniScorecard(raw2) : null) : await kv.get("sc_c_" + lm.id, "json").catch(() => null);
+          // A hand-verified final also outranks a provider scorecard frozen
+          // mid-match: a manual entry exists only after two independent
+          // sources confirmed the result, so a provider feed still claiming
+          // play is frozen, not live (Cricbuzz froze at 120/5 in cbz_176496
+          // for a full day). When the provider recovers and reports the match
+          // complete, its own reading wins again below.
+          const manualFinal = szManualCricketResult(lm.id);
+          if (manualFinal && sc2 && !sc2.complete) {
+            lm.status = "finished";
+            lm.statusText = manualFinal.statusText;
+            lm.scores = manualFinal.scores.map((s) => ({ ...s }));
+            delete lm.scoreDelayed;
+            delete lm.feedStuck;
+            console.log("cricket frozen live feed corrected via verified manual result:", String(lm.id));
+            continue;
+          }
           if (sc2 && Array.isArray(sc2.innings) && sc2.innings.length) {
             applyMiniScore(lm, sc2);
             continue;
@@ -5874,6 +5904,20 @@ var index_default = {
                 const pm = /^(\d+)\/(\d+)\s*\((\d+\.?\d*)\)$/.exec(String(s && s.value || ""));
                 return pm ? { inning: s.inning || "", r: +pm[1], w: +pm[2], o: +pm[3] } : null;
               }).filter(Boolean);
+            }
+            // Provider scorecard frozen mid-match while the list already
+            // carries the verified final: show the final innings lines, not
+            // the stale in-progress ones.
+            if (lm && lm.status === "finished" && Array.isArray(lm.scores) && !(d && d.ismatchcomplete)) {
+              const fin = lm.scores.map((s) => {
+                const pm = /^(\d+)\/(\d+)\s*\((\d+\.?\d*)\)$/.exec(String(s && s.value || ""));
+                return pm ? { inning: s.inning || "", r: +pm[1], w: +pm[2], o: +pm[3] } : null;
+              }).filter(Boolean);
+              if (fin.length) {
+                cached.innings = fin;
+                cached.status = lm.statusText || cached.status;
+                cached.winner = cached.winner || lm.statusText || null;
+              }
             }
             if (cached && (!cached.innings || !cached.innings.length)) {
               const s3 = await cbzHtmlScore(id.slice(4)).catch(() => null);
