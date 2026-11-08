@@ -14,7 +14,9 @@ function szCronMiniWorklist(matches, now = Date.now()) {
   const pool = (matches || []).filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= now))
     .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")));
   const work = pool.slice(0, 8);
-  for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || ""))) work.push(x);
+  // A hand-verified result must always reach the worklist, even when newer
+  // fixtures crowd the match out of the first eight (cbz_175811 never did).
+  for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || "")) || szManualCricketResult(x.id)) work.push(x);
   return work;
 }
 function szCricketTeamKey(t, fallback) {
