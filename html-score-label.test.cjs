@@ -12,7 +12,8 @@ const end=src.indexOf('\n',src.lastIndexOf('(applyHtmlScore, "applyHtmlScore");'
 assert(a>0&&end>a,'could not slice betterScore/applyHtmlScore');
 const stub='const __name=__name2=__name22=__name222=__name2222=__name22222=__name222222=__name2222222=__name22222222=(f)=>f;';
 const c=vm.createContext({});
-vm.runInContext(stub+src.slice(a,end),c);
+const top=src.slice(0,src.indexOf('// KV quota fix:'));
+vm.runInContext(top+stub+src.slice(a,end),c);
 let n=0;
 // 1 chase starting while only innings 1 is stored -> "BRHW 1", never "BRHW 2"
 {

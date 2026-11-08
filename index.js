@@ -17,22 +17,70 @@ function szCronMiniWorklist(matches, now = Date.now()) {
   for (const x of pool.slice(8)) if (/\bstumps\b/i.test(String(x.statusText || ""))) work.push(x);
   return work;
 }
+function szCricketTeamKey(t, fallback) {
+  const k = String(t ?? "").toLowerCase().replace(/\s+\d+$/, "").replace(/[^a-z0-9]+/g, "");
+  return k || fallback || "";
+}
 function szCricketProgress(innings) {
-  return (innings || []).map((i) => {
+  return (innings || []).map((i, n) => {
     const raw = String(i.overs ?? i.o ?? "");
     const m = /^(\d+)(?:\.(\d))?$/.exec(raw);
-    return { runs: Number(i.runs ?? i.r), wkts: Number(i.wkts ?? i.w),
+    return { team: szCricketTeamKey(i.team ?? i.inning, "row" + n),
+      runs: Number(i.runs ?? i.r), wkts: Number(i.wkts ?? i.w),
       balls: m ? Number(m[1]) * 6 + Number(m[2] || 0) : null };
   });
 }
-function szOlderCricketInnings(candidate, reference) {
-  const a = szCricketProgress(candidate), b = szCricketProgress(reference);
+function szProgressAhead(a, b) {
+  return (a.balls != null ? a.balls : -1) - (b.balls != null ? b.balls : -1) ||
+    (Number.isFinite(a.runs) && Number.isFinite(b.runs) ? a.runs - b.runs : 0) ||
+    (Number.isFinite(a.wkts) && Number.isFinite(b.wkts) ? a.wkts - b.wkts : 0);
+}
+// One innings can end up saved under two labels ("PAKU19 2" plus "PAKU19 1"
+// for the same chase) when two feed paths label it differently. The frozen
+// extra row then makes every fresh scorecard look older than the saved state
+// and pins the score (cbz_175660, 2026-11-08). Collapse same-team rows past
+// the format's limit (one per side in limited overs, two in Tests), keeping
+// the furthest-along reading. A short row of 6 balls or fewer can be a super
+// over and is never collapsed away.
+function szDedupeCricketProgress(rows, matchType) {
+  const allowed = /test/i.test(String(matchType || "")) ? 2 : 1;
+  const byTeam = {};
+  rows.forEach((r, i) => { (byTeam[r.team] = byTeam[r.team] || []).push(i); });
+  const drop = new Set();
+  for (const k of Object.keys(byTeam)) {
+    const idxs = byTeam[k];
+    if (idxs.length <= allowed) continue;
+    const short = new Set(idxs.filter((i) => rows[i].balls != null && rows[i].balls <= 6));
+    const real = idxs.filter((i) => !short.has(i)).sort((a, b) => szProgressAhead(rows[b], rows[a]));
+    const keep = new Set([...short, ...real.slice(0, allowed)]);
+    idxs.forEach((i) => { if (!keep.has(i)) drop.add(i); });
+  }
+  return rows.filter((_, i) => !drop.has(i));
+}
+function szOlderCricketInnings(candidate, reference, matchType) {
+  const a = szDedupeCricketProgress(szCricketProgress(candidate), matchType),
+    b = szDedupeCricketProgress(szCricketProgress(reference), matchType);
   if (!a.length || !b.length) return false;
   if (a.length !== b.length) return a.length < b.length;
   const x = a[a.length - 1], y = b[b.length - 1];
   if (x.balls != null && y.balls != null && x.balls !== y.balls) return x.balls < y.balls;
   return Number.isFinite(x.runs) && Number.isFinite(y.runs) && x.runs < y.runs ||
     Number.isFinite(x.wkts) && Number.isFinite(y.wkts) && x.wkts < y.wkts;
+}
+// The same rule applied to display rows ({inning, value}) so a corrupt saved
+// state is cleaned wherever scores are merged or written.
+function szCleanCricketScores(scores, matchType) {
+  if (!Array.isArray(scores) || scores.length < 2) return scores;
+  const rows = scores.map((s, n) => {
+    const m = /^(\d+)\/(\d+)\s*\((\d+(?:\.\d)?)\)$/.exec(String(s && s.value || ""));
+    const om = /^(\d+)(?:\.(\d))?$/.exec(m ? m[3] : "");
+    return { team: szCricketTeamKey(s && s.inning, "row" + n),
+      runs: m ? +m[1] : NaN, wkts: m ? +m[2] : NaN,
+      balls: om ? +om[1] * 6 + +(om[2] || 0) : null };
+  });
+  const kept = new Set(szDedupeCricketProgress(rows.map((r, i) => ({ ...r, __i: i })), matchType).map((r) => r.__i));
+  if (kept.size === scores.length) return scores;
+  return scores.filter((_, i) => kept.has(i));
 }
 function szListCricketInnings(match) {
   return (match && match.scores || []).map((s) => {
@@ -339,7 +387,7 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
         s = d ? cbzMiniScorecard(d) : null;
       }
       // Never let an older source reading replace a newer saved score.
-      if (s && Array.isArray(s.innings) && szOlderCricketInnings(s.innings, szListCricketInnings(m))) s = null;
+      if (s && Array.isArray(s.innings) && szOlderCricketInnings(s.innings, szListCricketInnings(m), m && m.matchType)) s = null;
       if (!s && m.status === "live") {
         m.scoreDelayed = true;
         console.error(JSON.stringify({ event: "score_overlay_unverified", sport: "cricket", id: String(m.id) }));
@@ -1463,6 +1511,12 @@ async function refresh(kind, env, ctx) {
         } catch (e) {
         }
       }
+      // A corrupt duplicate innings row in a saved state must not survive
+      // the merge; clean every match before comparing and writing.
+      for (const nm of cricket) {
+        const clean = szCleanCricketScores(nm.scores, nm.matchType);
+        if (clean !== nm.scores) nm.scores = clean;
+      }
       const oldBlob = await kv.get("cricket", "json");
       // A stale upstream list reading must not move a live score backwards -
       // the same rule the request overlay already applies to detail fetches.
@@ -1475,8 +1529,8 @@ async function refresh(kind, env, ctx) {
           const om = oldById[String(nm.id)];
           if (!om || !Array.isArray(om.scores) || !om.scores.length || !Array.isArray(nm.scores)) continue;
           const nInn = szListCricketInnings(nm), oInn = szListCricketInnings(om);
-          if ((oInn.length && !nInn.length) || szOlderCricketInnings(nInn, oInn)) {
-            nm.scores = om.scores;
+          if ((oInn.length && !nInn.length) || szOlderCricketInnings(nInn, oInn, nm.matchType || om.matchType)) {
+            nm.scores = szCleanCricketScores(om.scores, nm.matchType || om.matchType);
             if (om.statusText) nm.statusText = om.statusText;
           }
         }
@@ -3725,7 +3779,7 @@ function applyMiniScore(lm, s) {
   if (!lm || !s) return false;
   let changed = false;
   if (Array.isArray(s.innings) && s.innings.length) {
-    const cur = Array.isArray(lm.scores) ? lm.scores.slice() : [];
+    const cur = szCleanCricketScores(Array.isArray(lm.scores) ? lm.scores.slice() : [], lm.matchType);
     const shortFor = /* @__PURE__ */ __name2((nm) => {
       const n = String(nm || "").toLowerCase();
       if (lm.home && lm.home.short && String(lm.home.name || "").toLowerCase() === n) return lm.home.short;
@@ -3776,7 +3830,7 @@ __name22222222(applyMiniScore, "applyMiniScore");
 function applyHtmlScore(lm, s, matchType) {
   if (!s || !s.scores || !s.scores.length) return false;
   const defOvers = matchType === "T20" ? "20" : "50";
-  const cur = Array.isArray(lm.scores) ? lm.scores.slice() : [];
+  const cur = szCleanCricketScores(Array.isArray(lm.scores) ? lm.scores.slice() : [], matchType);
   let changed = false;
   s.scores.forEach((sc, i) => {
     const innIdx = s.scores.length === 2 ? i === 0 ? 1 : 0 : 0;
@@ -5987,8 +6041,8 @@ var index_default = {
             const latestList = env.SPORTS_KV ? await env.SPORTS_KV.get("cricket", "json").catch(() => null) : null;
             const latestMatch = latestList && Array.isArray(latestList.matches) ? latestList.matches.find((m) => m.id === id) : null;
             const listInnings = szListCricketInnings(latestMatch);
-            if (latestMatch && latestMatch.status === "live" && (!reference.length || szOlderCricketInnings(reference, listInnings))) reference = listInnings;
-            if (szOlderCricketInnings(scorecard.innings, reference)) {
+            if (latestMatch && latestMatch.status === "live" && (!reference.length || szOlderCricketInnings(reference, listInnings, cached.matchType))) reference = listInnings;
+            if (szOlderCricketInnings(scorecard.innings, reference, cached.matchType)) {
               // Keep known newer totals; do not combine old batting/bowling figures with them.
               cached = { ...cached, innings: reference };
               scorecard = null;
