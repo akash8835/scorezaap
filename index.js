@@ -323,7 +323,9 @@ function szCricketStuckAfterMs(matchType) {
 // Hand-verified results for matches no free provider kept covering. An entry
 // is added only after the final result is confirmed against two independent
 // live sources, and it expires 10 days after the match start so the table
-// cannot grow stale. The stuck-feed branch adopts it exactly like a
+// cannot grow stale. An entry may set "until" (ISO timestamp) to stay live
+// longer when the provider still broadcasts the fixture with a wrong result
+// past the default window; the stuck-feed branch adopts it exactly like a
 // conclusive cricapi reading of the same fixture.
 var SZ_MANUAL_CRICKET_RESULTS = {
   // SWD vs Boland, Super Eights, CSA T20 Challenge 2026 (Paarl, 7 Nov 2026):
@@ -376,6 +378,10 @@ var SZ_MANUAL_CRICKET_RESULTS = {
   // 212 runs) and the Irish Independent match report (212-run victory).
   cbz_175811: {
     start: "2026-11-05T08:00:00.000Z",
+    // Cricbuzz still lists this fixture as Complete with the wrong margin
+    // weeks later, so keep the verified result pinned until it has aged out
+    // of every provider feed, not just past the default 10-day window.
+    until: "2026-12-06T00:00:00.000Z",
     statusText: "Ireland A won by 212 runs",
     scores: [
       { inning: "IREA 1", value: "424/10 (93.1)" },
@@ -397,7 +403,10 @@ function szManualCricketResult(id) {
   const r = SZ_MANUAL_CRICKET_RESULTS[String(id)];
   if (!r) return null;
   const t0 = Date.parse(r.start || "");
-  if (!Number.isFinite(t0) || Date.now() < t0 || Date.now() - t0 > 10 * 24 * 36e5) return null;
+  if (!Number.isFinite(t0) || Date.now() < t0) return null;
+  const t1 = Date.parse(r.until || "");
+  if (Number.isFinite(t1)) return Date.now() <= t1 ? r : null;
+  if (Date.now() - t0 > 10 * 24 * 36e5) return null;
   return r;
 }
 // A hand-verified result stays the final word even after the provider flips

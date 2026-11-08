@@ -86,4 +86,23 @@ assert.equal(+mm[1], margin, 'status text margin contradicts innings');
 assert.equal(margin, 212);
 n++;
 
+// 6. Expiry: a past "until" retires the entry even inside the 10-day window;
+// a future "until" keeps it live past the default 10 days (the cbz_175811
+// case: provider still broadcasts the wrong margin weeks later).
+c.SZ_MANUAL_CRICKET_RESULTS.cbz_t2exp = {
+  start: new Date(Date.now() - 2 * 24 * 36e5).toISOString(),
+  until: new Date(Date.now() - 36e5).toISOString(),
+  statusText: 'X won by 1 run', scores: []
+};
+assert.equal(c.szManualCricketResult('cbz_t2exp'), null);
+c.SZ_MANUAL_CRICKET_RESULTS.cbz_t3exp = {
+  start: new Date(Date.now() - 20 * 24 * 36e5).toISOString(),
+  until: new Date(Date.now() + 7 * 24 * 36e5).toISOString(),
+  statusText: 'Y won by 2 runs', scores: []
+};
+assert.equal(c.szManualCricketResult('cbz_t3exp').statusText, 'Y won by 2 runs');
+// The real entry's extended pin lands after every feed has aged the fixture out.
+assert.ok(Date.parse(real.until) > Date.parse(real.start) + 10 * 24 * 36e5, 'cbz_175811 until missing or too short');
+n++;
+
 console.log('manual-result-precedence ok:', n, 'groups');
