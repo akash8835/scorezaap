@@ -1063,6 +1063,40 @@ async function szFootballReconcile(matches, stats) {
     if (szFbApplyEspn(m, hit)) stats.reconciled++;
   }
 }
+// Backoff only: this is not an atomic request-budget reservation.
+// In-flight calls can still race before a provider rejection is recorded.
+const szFdLocalBackoff = new WeakMap();
+function szFdResetAt(headers, now) {
+  const delays = [];
+  const retry = headers.get("Retry-After");
+  if (retry && /^\d+(?:\.\d+)?$/.test(retry.trim())) delays.push(Number(retry) * 1000);
+  else if (retry) { const at = Date.parse(retry); if (Number.isFinite(at) && at > now) delays.push(at - now); }
+  const reset = headers.get("X-RequestCounter-Reset");
+  if (reset && /^\d+(?:\.\d+)?$/.test(reset.trim())) delays.push(Number(reset) * 1000);
+  const positive = delays.filter(x => Number.isFinite(x) && x > 0 && Number.isSafeInteger(Math.ceil(now + x)));
+  // Missing/invalid reset evidence: 60s is a policy cooldown, not a known reset.
+  return Math.ceil(now + (positive.length ? Math.max(...positive) : 60000));
+}
+async function szFdFetch(env, url, options) {
+  const blocked = () => new Response(null, { status: 503, headers: { "X-ScoreZaap-FD-Backoff": "1" } });
+  if ((szFdLocalBackoff.get(env) || 0) > Date.now()) return blocked();
+  if (!env.DB) return blocked();
+  try {
+    const row = await env.DB.prepare("SELECT value FROM sz_automation WHERE id=?").bind("fd_blocked_until").first();
+    if (row && Number(row.value) > Date.now()) return blocked();
+  } catch { return blocked(); } // Storage failure: use the caller's cached fallback.
+  const response = await fetch(url, options);
+  if (response.status === 429) {
+    const until = szFdResetAt(response.headers, Date.now());
+    szFdLocalBackoff.set(env, Math.max(szFdLocalBackoff.get(env) || 0, until));
+    try {
+      // Monotonic single-statement update: older responses cannot reopen the gate.
+      await env.DB.prepare("INSERT INTO sz_automation(id,value,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET value=CAST(MAX(CAST(sz_automation.value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT),updated_at=excluded.updated_at")
+        .bind("fd_blocked_until", String(until), new Date().toISOString()).run();
+    } catch { /* Local cooldown still protects this env; other isolates may not see it. */ }
+  }
+  return response;
+}
 async function fetchFootball(env, stats, prev) {
   stats = stats || {};
   const df = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
@@ -1070,12 +1104,23 @@ async function fetchFootball(env, stats, prev) {
   const h2 = { "X-Auth-Token": env.FOOTBALL_DATA_KEY };
   const out = [];
   const seenIds = {};
-  const batches = [FOOT_COMPS.slice(0, 5), FOOT_COMPS.slice(5)];
-  for (const batch of batches) {
-    const results = await Promise.all(batch.map(
-      (c) => fetch(`${FOOT_API}/competitions/${c}/matches?dateFrom=${df}&dateTo=${dt2}`, { headers: h2 }).then((r) => { stats.fdStatus = stats.fdStatus || {}; stats.fdStatus[c] = r.status; return r.ok ? r.json() : null; }).catch(() => null)
-    ));
-    batch.forEach((c, ix) => { if (results[ix]) stats.fdOk = (stats.fdOk || 0) + 1; else (stats.fdFailed = stats.fdFailed || []).push(c); });
+  const results = [];
+  stats.fdStatus = {};
+  stats.fdFailed = [];
+  let stopped = false;
+  for (const c of FOOT_COMPS) {
+    if (stopped) { stats.fdFailed.push(c); continue; }
+    try {
+      const r = await szFdFetch(env, `${FOOT_API}/competitions/${c}/matches?dateFrom=${df}&dateTo=${dt2}`, { headers: h2 });
+      stats.fdStatus[c] = r.status;
+      const backoff = r.status === 429 || r.headers.get("X-ScoreZaap-FD-Backoff") === "1";
+      if (backoff) { stopped = true; stats.backoff = true; }
+      const j = r.ok ? await r.json() : null;
+      if (j) { results.push(j); stats.fdOk = (stats.fdOk || 0) + 1; }
+      else stats.fdFailed.push(c);
+    } catch { stats.fdFailed.push(c); }
+  }
+  {
     for (const j of results) {
       for (const m of j && j.matches || []) {
         if (seenIds[m.id]) continue;
@@ -5635,8 +5680,8 @@ var index_default = {
         if (!cached) {
           const h = { "X-Auth-Token": env2.FOOTBALL_DATA_KEY || "" };
           const [st, mt] = await Promise.all([
-            fetch(`${FOOT_API}/competitions/${id}/standings`, { headers: h }).then((r) => r.ok ? r.json() : null),
-            fetch(`${FOOT_API}/competitions/${id}/matches`, { headers: h }).then((r) => r.ok ? r.json() : null)
+            szFdFetch(env2, `${FOOT_API}/competitions/${id}/standings`, { headers: h }).then((r) => r.ok ? r.json() : null),
+            szFdFetch(env2, `${FOOT_API}/competitions/${id}/matches`, { headers: h }).then((r) => r.ok ? r.json() : null)
           ]);
           if (!st && !mt) return { error: "competition not available" };
           const tables = (st?.standings || []).filter((x) => x.type === "TOTAL").map((x) => ({
@@ -6271,7 +6316,7 @@ if (lm2 && lm2.status === "live") {
           const fcached = env.SPORTS_KV ? await env.SPORTS_KV.get(fkey, "json") : null;
           let fdetail = fcached;
           if (!fdetail) {
-            const r = await fetch(`${FOOT_API}/matches/${id}`, { headers: { "X-Auth-Token": env.FOOTBALL_DATA_KEY || "" } });
+            const r = await szFdFetch(env, `${FOOT_API}/matches/${id}`, { headers: { "X-Auth-Token": env.FOOTBALL_DATA_KEY || "" } });
             if (!r.ok) {
               // provider rate limit or outage: fall back to the cached list entry instead of an error page
               const flb = env.SPORTS_KV ? await env.SPORTS_KV.get("football", "json").catch(() => null) : null;
