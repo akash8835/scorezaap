@@ -21,7 +21,7 @@ function db(){const rows=new Map();return {rows,prepare(sql){let b=[];return {bi
  rows.set(b[0],{value:b[1],at:b[2]});return {meta:{changes:1}};
  }}}}}
 const DB=db();let repaired=[],modelCalls=0,mail=[];
-const env={DB,AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(args.max_tokens,64);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
+const env={DB,AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(args.max_tokens,64);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
 let debug=healthy;
 const a={readDebug:async job=>debug[job],repair:async job=>repaired.push(job)};
 assert.equal((await run(env,a,'check',now)).state,'ok');
@@ -33,6 +33,6 @@ await run(env,a,'check',now+3000);assert.equal(repaired.length,2);assert.equal(m
 debug=healthy;await run(env,a,'check',now+4000);assert.equal(mail.length,2);assert.ok(mail[1].subject.includes('recovered'));
 await run(env,a,'daily',now+5000);await run(env,a,'daily',now+6000);assert.equal(modelCalls,1);
 assert.equal((await run({...env,AUTOPILOT_DISABLED:'true'},a)).state,'disabled');
-assert.equal((await notify({}, {jobs:['news']})).state,'blocked');
+assert.equal((await notify({AUTOPILOT_ALERTS_ENABLED:'true'}, {jobs:['news']})).state,'blocked');
 const fail={...env,AI:{async run(){throw Error('quota')}}};await run(fail,a,'daily',now+86400000);assert.equal(JSON.parse(DB.rows.get('daily').value).state,'fallback');
 console.log('Autopilot: classification, calendar, schema validation, lock/cooldown, bounded repairs, dedup/recovery, mail recipients, model cap/fallback and kill switch passed');
