@@ -34,5 +34,8 @@ debug=healthy;await run(env,a,'check',now+4000);assert.equal(mail.length,2);asse
 await run(env,a,'daily',now+5000);await run(env,a,'daily',now+6000);assert.equal(modelCalls,1);
 assert.equal((await run({...env,AUTOPILOT_DISABLED:'true'},a)).state,'disabled');
 assert.equal((await notify({AUTOPILOT_ALERTS_ENABLED:'true'}, {jobs:['news']})).state,'blocked');
+const mailBeforeHold=mail.length;
+assert.equal((await notify({...env,AUTOPILOT_ALERTS_ENABLED:undefined},{jobs:['news']})).state,'held');
+assert.equal(mail.length,mailBeforeHold); // No scheduled send before readiness is explicitly enabled.
 const fail={...env,AI:{async run(){throw Error('quota')}}};await run(fail,a,'daily',now+86400000);assert.equal(JSON.parse(DB.rows.get('daily').value).state,'fallback');
 console.log('Autopilot: classification, calendar, schema validation, lock/cooldown, bounded repairs, dedup/recovery, mail recipients, model cap/fallback and kill switch passed');
