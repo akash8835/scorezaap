@@ -55,6 +55,8 @@ const mk = () => ({ status: 'live', matchType: 'TEST',
   assert.ok(flat.includes('410/10 (118.5)'), flat);
   assert.ok(flat.includes('50/2 (11.4)'), flat);
   assert.ok(!flat.includes('NSW 3'), flat);
+  // and the healed rows sit in innings order, not with SAUS 1 behind SAUS 2
+  assert.deepEqual(clean.map((s) => s.inning), ['NSW 1', 'SAUS 1', 'NSW 2', 'SAUS 2']);
   n++;
 }
 

@@ -3925,11 +3925,13 @@ function applyMiniScore(lm, s) {
       return String(nm || "TM").slice(0, 8);
     }, "shortFor");
     const teamCount = {};
-    s.innings.forEach((inn) => {
+    const order = {};
+    s.innings.forEach((inn, n) => {
       const val = (inn.runs != null ? inn.runs : 0) + "/" + (inn.wkts != null ? inn.wkts : 0) + " (" + inn.overs + ")";
       const sh = shortFor(inn.team);
       teamCount[sh] = (teamCount[sh] || 0) + 1;
       const label = sh + " " + teamCount[sh];
+      order[label] = n;
       const idx = cur.findIndex((x) => x && x.inning === label);
       if (idx < 0) {
         // A provider glitch can repeat one innings in the scorecard, which
@@ -3946,7 +3948,17 @@ function applyMiniScore(lm, s) {
         changed = true;
       }
     });
-    if (changed) lm.scores = cur;
+    if (changed) {
+      // Keep rows in the match's innings order: an appended row must not sit
+      // behind a later innings (a healed "SAUS 1" landed after "SAUS 2",
+      // cbz_166653 2026-11-13). Rows this scorecard does not know keep their
+      // relative order at the end.
+      lm.scores = cur.map((x, i) => ({ x, i })).sort((a, b) => {
+        const oa = order[a.x.inning] != null ? order[a.x.inning] : 1e3 + a.i;
+        const ob = order[b.x.inning] != null ? order[b.x.inning] : 1e3 + b.i;
+        return oa - ob;
+      }).map((r) => r.x);
+    }
   }
   if (s.complete) {
     if (lm.status !== "finished") {
