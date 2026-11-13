@@ -48,7 +48,7 @@ export async function status(env){
   try{await schema(env);return {version:VERSION,...await get(env,'state'),daily:await get(env,'daily'),mail:await get(env,'mail')}}catch{return {version:VERSION,state:'storage_unavailable'}}
 }
 export async function notify(env, incident, recovered=false){
-  const body = `ScoreZaap ${recovered?'recovery':'issue'}\n\n${recovered?'The previously reported checks are healthy again.':'One or more site or automation checks failed.'}\nAffected checks: ${incident.jobs.join(', ')}\nFix status: ${recovered?'Verified healthy on a later independent check.':'A bounded retry was attempted where safe. Unresolved problems need review; no unrestricted production code rewrite was made.'}\nSite: https://scorezaap.tech/\n\nScoreZaap Autopilot, Akash's site assistant`;
+  const body = `ScoreZaap ${recovered?'recovery':'issue'}\n\n${recovered?'The previously reported checks are healthy again.':'One or more site or automation checks failed.'}\nAffected checks: ${incident.jobs.join(', ')}\nFix status: ${recovered?'Verified healthy on a later independent check.':'Safe bounded retries are enabled only when the repair credential is configured. The checks above remain unresolved and need review. No unrestricted production code rewrite was made.'}\nSite: https://scorezaap.tech/\n\nScoreZaap Autopilot, Akash's site assistant`;
   if(!env.AUTOPILOT_EMAIL || !env.AUTOPILOT_EMAIL_TO || !env.AUTOPILOT_EMAIL_CC || !env.AUTOPILOT_EMAIL_FROM)return {state:'blocked',reason:'email_binding_not_configured'};
   try{
     const r=await env.AUTOPILOT_EMAIL.send({from:env.AUTOPILOT_EMAIL_FROM,to:env.AUTOPILOT_EMAIL_TO,cc:env.AUTOPILOT_EMAIL_CC,subject:recovered?'ScoreZaap: checks recovered':'ScoreZaap: site needs attention',text:body});

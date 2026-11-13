@@ -27,6 +27,7 @@ export async function check(env,fetcher=fetch){
     }catch{failed.push(kind)}
   }
   const state={version:VERSION,at:new Date().toISOString(),state:failed.length?'degraded':'ok',failed,consecutive:failed.length?(old.consecutive||0)+1:0,incident:old.incident||null};
+  if(!env.CRON_SECRET){failed.push('repair_auth_missing');state.repair='not_configured'}
   if(env.CRON_SECRET){
     try{
       // Existing bounded internal repair planner, not arbitrary code execution.
