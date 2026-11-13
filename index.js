@@ -3948,17 +3948,18 @@ function applyMiniScore(lm, s) {
         changed = true;
       }
     });
-    if (changed) {
-      // Keep rows in the match's innings order: an appended row must not sit
-      // behind a later innings (a healed "SAUS 1" landed after "SAUS 2",
-      // cbz_166653 2026-11-13). Rows this scorecard does not know keep their
-      // relative order at the end.
-      lm.scores = cur.map((x, i) => ({ x, i })).sort((a, b) => {
-        const oa = order[a.x.inning] != null ? order[a.x.inning] : 1e3 + a.i;
-        const ob = order[b.x.inning] != null ? order[b.x.inning] : 1e3 + b.i;
-        return oa - ob;
-      }).map((r) => r.x);
-    }
+    // Keep rows in the match's innings order: an appended row must not sit
+    // behind a later innings (a healed "SAUS 1" landed after "SAUS 2",
+    // cbz_166653 2026-11-13). Rows this scorecard does not know keep their
+    // relative order at the end. A re-sort alone is also a change, so an
+    // already mis-ordered saved state is rewritten once.
+    const sorted = cur.map((x, i) => ({ x, i })).sort((a, b) => {
+      const oa = order[a.x.inning] != null ? order[a.x.inning] : 1e3 + a.i;
+      const ob = order[b.x.inning] != null ? order[b.x.inning] : 1e3 + b.i;
+      return oa - ob;
+    }).map((r) => r.x);
+    if (JSON.stringify(sorted) !== JSON.stringify(cur)) changed = true;
+    if (changed) lm.scores = sorted;
   }
   if (s.complete) {
     if (lm.status !== "finished") {

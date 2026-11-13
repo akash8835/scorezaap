@@ -107,3 +107,18 @@ const mk = () => ({ status: 'live', matchType: 'TEST',
 }
 
 console.log('innings-dupe ok:', n, 'checks');
+
+// 7 an already mis-ordered saved state (SAUS 1 behind SAUS 2) is re-sorted to
+// innings order even though no figures change
+{
+  const lm = mk();
+  lm.scores = [
+    { inning: 'NSW 1', value: '204/10 (47.2)' },
+    { inning: 'NSW 2', value: '410/10 (118.5)' },
+    { inning: 'SAUS 2', value: '50/2 (11.4)' },
+    { inning: 'SAUS 1', value: '325/10 (82.5)' }];
+  const changed = c.applyMiniScore(lm, { status: 'Day 3: Stumps', complete: false, innings: [NSW204, SAUS325, NSW410, SAUS50] });
+  assert.equal(changed, true);
+  assert.deepEqual(lm.scores.map((s) => s.inning), ['NSW 1', 'SAUS 1', 'NSW 2', 'SAUS 2']);
+  console.log('innings-dupe order-heal ok');
+}
