@@ -1,0 +1,13 @@
+import {strict as assert} from 'node:assert';
+import {validResponse} from './guardian.js';
+assert.equal(validResponse('scores',200,'{"cricket":[{"id":"x"}],"football":[]}'),true);
+assert.equal(validResponse('scores',200,'{"cricket":[],"football":[]}'),false);
+assert.equal(validResponse('scores',200,'{"error":"upstream"}'),false);
+assert.equal(validResponse('homepage',200,'ScoreZaap <div id="scores">'),true);
+assert.equal(validResponse('homepage',200,'<h1>Error</h1>'),false);
+assert.equal(validResponse('homepage',500,'ScoreZaap id="scores"'),false);
+assert.equal(validResponse('automation',200,'{"state":"degraded"}'),false);
+assert.equal(validResponse('automation',200,'{"state":"ok"}'),true);
+assert.equal(validResponse('news',200,'{"items":[{"title":"a"}]}'),true);
+assert.equal(validResponse('news',200,'not json'),false);
+console.log('Guardian response/schema/error checks passed');

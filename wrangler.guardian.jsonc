@@ -1,0 +1,10 @@
+{
+  "name": "scorezaap-guardian",
+  "main": "guardian.js",
+  "account_id": "b4b88d72ecf4113a7ac35bd3a9eb8902",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "d1_databases": [{"binding":"DB","database_name":"scorezaap-db","database_id":"b6c8be16-abfb-4c2c-9bbb-a8517bacdb49"}],
+  "triggers": {"crons":["37 * * * *"]},
+  "observability": {"enabled":true,"logs":{"enabled":true,"invocation_logs":false}}
+}
