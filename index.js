@@ -44,6 +44,10 @@ function szProgressAhead(a, b) {
 // the format's limit (one per side in limited overs, two in Tests), keeping
 // the furthest-along reading. A short row of 6 balls or fewer can be a super
 // over and is never collapsed away.
+// A provider glitch can also list one innings twice under two labels (a
+// phantom "NSW 3" repeating "NSW 2"s exact figures, cbz_166653 2026-11-13).
+// Drop the later exact copy first: otherwise the copy counts towards the
+// format limit and the genuine other innings ("NSW 1") is collapsed away.
 function szDedupeCricketProgress(rows, matchType) {
   const allowed = /test/i.test(String(matchType || "")) ? 2 : 1;
   const byTeam = {};
@@ -53,9 +57,20 @@ function szDedupeCricketProgress(rows, matchType) {
     const idxs = byTeam[k];
     if (idxs.length <= allowed) continue;
     const short = new Set(idxs.filter((i) => rows[i].balls != null && rows[i].balls <= 6));
-    const real = idxs.filter((i) => !short.has(i)).sort((a, b) => szProgressAhead(rows[b], rows[a]));
-    const keep = new Set([...short, ...real.slice(0, allowed)]);
-    idxs.forEach((i) => { if (!keep.has(i)) drop.add(i); });
+    const seen = {};
+    const real = [];
+    for (const i of idxs) {
+      if (short.has(i)) continue;
+      const sig = rows[i].runs + "/" + rows[i].wkts + "/" + rows[i].balls;
+      if (seen[sig] != null) { drop.add(i); continue; }
+      seen[sig] = i;
+      real.push(i);
+    }
+    if (real.length > allowed) {
+      real.sort((a, b) => szProgressAhead(rows[b], rows[a]));
+      const keep = new Set(real.slice(0, allowed));
+      real.forEach((i) => { if (!keep.has(i)) drop.add(i); });
+    }
   }
   return rows.filter((_, i) => !drop.has(i));
 }
@@ -3917,8 +3932,15 @@ function applyMiniScore(lm, s) {
       const label = sh + " " + teamCount[sh];
       const idx = cur.findIndex((x) => x && x.inning === label);
       if (idx < 0) {
-        cur.push({ inning: label, value: val });
-        changed = true;
+        // A provider glitch can repeat one innings in the scorecard, which
+        // would otherwise be appended as a phantom extra row ("NSW 3" copying
+        // "NSW 2", cbz_166653 2026-11-13). Never add a row whose figures an
+        // existing row of the same side already carries.
+        const dup = cur.some((x) => x && x.value === val && szCricketTeamKey(x.inning) === szCricketTeamKey(label));
+        if (!dup) {
+          cur.push({ inning: label, value: val });
+          changed = true;
+        }
       } else if (betterScore(cur, idx, val)) {
         cur[idx] = { inning: label, value: val };
         changed = true;
