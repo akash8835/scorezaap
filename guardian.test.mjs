@@ -1,5 +1,5 @@
 import {strict as assert} from 'node:assert';
-import {validResponse} from './guardian.js';
+import {validResponse,check} from './guardian.js';
 assert.equal(validResponse('scores',200,'{"cricket":[{"id":"x"}],"football":[]}'),true);
 assert.equal(validResponse('scores',200,'{"cricket":[],"football":[]}'),false);
 assert.equal(validResponse('scores',200,'{"error":"upstream"}'),false);
@@ -11,3 +11,11 @@ assert.equal(validResponse('automation',200,'{"state":"ok"}'),true);
 assert.equal(validResponse('news',200,'{"items":[{"title":"a"}]}'),true);
 assert.equal(validResponse('news',200,'not json'),false);
 console.log('Guardian response/schema/error checks passed');
+
+const rows=new Map();let mails=0;
+const env={AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL:{async send(){mails++;return {messageId:'mock'}}},AUTOPILOT_EMAIL_FROM:'alerts@example.test',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',DB:{prepare(sql){let values=[];return {bind(...v){values=v;return this},async first(){return rows.has(values[0])?{value:rows.get(values[0])}:null},async run(){if(!sql.startsWith('CREATE'))rows.set(values[0],values[1]);return {meta:{changes:1}}}}}}};
+const fetcher=async url=>new Response(url.endsWith('/api/scores')?'{"cricket":[{"id":"x"}]}':url.endsWith('/api/news')?'{"items":[{"title":"x"}]}':url.endsWith('/api/automation-health')?'{"state":"ok"}':url.endsWith('/sitemap.xml')?'<urlset>scorezaap.tech</urlset>':'ScoreZaap <div id="scores">');
+await check(env,fetcher);
+const state=await check(env,fetcher);
+assert.equal(state.state,'degraded');assert.ok(state.failed.includes('repair_auth_missing'));assert.equal(mails,0);
+console.log('Guardian keeps missing-auth setup state private without setup alerts');

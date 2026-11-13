@@ -42,13 +42,15 @@ export async function check(env,fetcher=fetch){
   state.state=failed.length?'degraded':'ok';
   if(failed.length&&!state.consecutive)state.consecutive=(old.consecutive||0)+1;
   // Confirm broad outage or repeated degraded checks before major-issue email.
-  const major=failed.includes('homepage')&&failed.includes('scores') || state.consecutive>=2;
-  const key=failed.join('|');
+  const incidentJobs=failed.filter(job=>job!=='repair_auth_missing');
+  // Missing setup authorization is private readiness state, never a setup email.
+  const major=incidentJobs.includes('homepage')&&incidentJobs.includes('scores') || incidentJobs.length>0&&state.consecutive>=2;
+  const key=incidentJobs.join('|');
   if(major&&key!==old.incident?.key){
-    const incident={key,jobs:failed,at:state.at};
+    const incident={key,jobs:incidentJobs,at:state.at};
     const mail=await notify(env,incident);state.mail=mail;
     if(mail.state==='accepted')state.incident=incident;
-  }else if(!failed.length&&old.incident){
+  }else if(!incidentJobs.length&&old.incident){
     const mail=await notify(env,old.incident,true);state.mail=mail;
     if(mail.state==='accepted')state.incident=null;
   }

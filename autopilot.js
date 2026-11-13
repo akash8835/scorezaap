@@ -1,5 +1,5 @@
 // ScoreZaap standalone operations. No model output is executable code.
-export const VERSION = '2026-11-13.1';
+export const VERSION = '2026-11-13.2';
 const HOUR = 3600000;
 export const JOBS = ['scores', 'football', 'news', 'enrich'];
 export function classify(debug, now = Date.now()) {
