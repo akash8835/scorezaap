@@ -6236,29 +6236,15 @@ var index_default = {
   }
 }
 if (lm2 && lm2.status === "live") {
-                const better2 = /* @__PURE__ */ __name222222((cur2, idx2, val2) => {
-                  const pm = /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(val2 || "");
-                  if (!pm) return false;
-                  const cRuns = +pm[1], cOv = +pm[3];
-                  const ex = cur2 && cur2[idx2] && /(\d+)\/(\d+)\s*\((\d+\.?\d*)\)/.exec(cur2[idx2].value || "");
-                  if (!ex) return true;
-                  const eRuns = +ex[1], eOv = +ex[3];
-                  return cOv > eOv || cOv === eOv && cRuns > eRuns;
-                }, "better2");
-                const cur = Array.isArray(lm2.scores) ? lm2.scores.slice() : [];
-                let changed = false;
-                scorecard.innings.forEach((inn, i) => {
-                  const th = norm(lm2.home && lm2.home.name || ""), tt = norm(inn.team || "");
-                  const isHome = th && tt && (tt.includes(th) || th.includes(tt));
-                  const short = (((isHome ? lm2.home && lm2.home.short : lm2.away && lm2.away.short) || inn.team || "TM") + "").slice(0, 8);
-                  const val = (inn.runs != null ? inn.runs : 0) + "/" + (inn.wkts != null ? inn.wkts : 0) + " (" + inn.overs + ")";
-                  if (better2(cur, i, val)) {
-                    cur[i] = { inning: short + " " + (i + 1), value: val };
-                    changed = true;
-                  }
-                });
+                // The list blob must be assembled the same way everywhere:
+                // applyMiniScore labels an innings by the batting side's own
+                // count. The positional writer this replaced labelled by match
+                // slot, so a side's second innings in slot 3 became "NSW 3"
+                // and overwrote the opponent's first innings whenever the
+                // saved rows sat in team-grouped order (cbz_166653,
+                // 2026-11-13).
+                const changed = applyMiniScore(lm2, scorecard);
                 if (changed) {
-                  lm2.scores = cur;
                   await env.SPORTS_KV.put("cricket", JSON.stringify(cl));
                 }
               }

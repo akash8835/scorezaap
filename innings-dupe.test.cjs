@@ -77,7 +77,25 @@ const mk = () => ({ status: 'live', matchType: 'TEST',
   n++;
 }
 
-// 5 a genuinely new innings with its own figures is still added
+// 5 saved rows in team-grouped order (the list feed's shape) merged with a
+// chronological scorecard: no slot-based relabeling, no phantom, no lost row.
+// This is the /api/match detail writer regression behind cbz_166653.
+{
+  const lm = mk();
+  lm.scores = [
+    { inning: 'NSW 1', value: '204/10 (47.2)' },
+    { inning: 'NSW 2', value: '410/10 (118.5)' },
+    { inning: 'SAUS 1', value: '325/10 (82.5)' },
+    { inning: 'SAUS 2', value: '50/2 (11.4)' }];
+  const changed = c.applyMiniScore(lm, { status: 'Day 3: Stumps', complete: false, innings: [NSW204, SAUS325, NSW410, SAUS50] });
+  const flat = JSON.stringify(lm.scores);
+  assert.equal(lm.scores.length, 4, flat);
+  assert.ok(!flat.includes('NSW 3'), flat);
+  assert.ok(flat.includes('325/10 (82.5)'), flat);
+  n++;
+}
+
+// 6 a genuinely new innings with its own figures is still added
 {
   const lm = mk();
   lm.scores = lm.scores.slice(0, 3);
