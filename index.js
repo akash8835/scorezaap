@@ -79,7 +79,22 @@ function szOlderCricketInnings(candidate, reference, matchType) {
     b = szDedupeCricketProgress(szCricketProgress(reference), matchType);
   if (!a.length || !b.length) return false;
   if (a.length !== b.length) return a.length < b.length;
-  const x = a[a.length - 1], y = b[b.length - 1];
+  // Feed paths can group a team's innings while scorecards are chronological.
+  // Cancel identical completed readings as a multiset first. If just one row
+  // changed, compare that innings, never a different team's final array row.
+  // Matching figures also work across provider full-name/short-name aliases.
+  const remaining = b.slice();
+  const changed = [];
+  for (const row of a) {
+    const index = remaining.findIndex(other => row.balls != null && other.balls != null &&
+      Number.isFinite(row.runs) && Number.isFinite(row.wkts) &&
+      row.balls === other.balls && row.runs === other.runs && row.wkts === other.wkts);
+    if (index >= 0) remaining.splice(index, 1); else changed.push(row);
+  }
+  if (!changed.length && !remaining.length) return false;
+  const singleChange = changed.length === 1 && remaining.length === 1;
+  const x = singleChange ? changed[0] : a[a.length - 1],
+    y = singleChange ? remaining[0] : b[b.length - 1];
   if (x.balls != null && y.balls != null && x.balls !== y.balls) return x.balls < y.balls;
   return Number.isFinite(x.runs) && Number.isFinite(y.runs) && x.runs < y.runs ||
     Number.isFinite(x.wkts) && Number.isFinite(y.wkts) && x.wkts < y.wkts;

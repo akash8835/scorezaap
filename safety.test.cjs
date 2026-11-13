@@ -37,3 +37,16 @@ console.log(n+' safety assertions passed');
  }
  console.log('3 route integration scenarios passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Chronological scorecards versus team-grouped saved Test innings.
+const row=(team,runs,wkts,overs)=>({team,runs,wkts,overs});
+const pak1=row('Pakistan',434,9,106.3),sl1=row('Sri Lanka',446,10,117.2);
+const saved=[row('PAK 1',434,9,106.3),row('PAK 2',218,6,69.5),row('SL 1',446,10,117.2)];
+assert.equal(c.szOlderCricketInnings([pak1,sl1,row('Pakistan',251,6,79)],saved,'TEST'),false);
+assert.equal(c.szOlderCricketInnings([pak1,sl1,row('Pakistan',210,6,68)],saved,'TEST'),true);
+assert.equal(c.szOlderCricketInnings([pak1,sl1,row('Pakistan',218,6,69.5)],saved,'TEST'),false);
+const nsw1=row('New South Wales',204,10,47.2),nsw2=row('New South Wales',410,10,118.5),sa1=row('South Australia',325,10,82.5),sa2=row('South Australia',50,2,11.4);
+assert.equal(c.szOlderCricketInnings([nsw1,sa1,nsw2,sa2],[row('NSW 1',204,10,47.2),row('NSW 2',410,10,118.5),row('SAUS 2',50,2,11.4),row('SAUS 1',325,10,82.5)],'TEST'),false);
+// Matching duplicates must cancel once, not hide an unmatched older innings.
+assert.equal(c.szOlderCricketInnings([row('A',10,1,2),row('A',10,1,2)],[row('A',10,1,2),row('B',20,2,4)],'TEST'),true);
+console.log('Order-independent Test innings regression guard: 5 cases passed');
