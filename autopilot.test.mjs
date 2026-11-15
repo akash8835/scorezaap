@@ -21,7 +21,7 @@ function db(){const rows=new Map();return {rows,prepare(sql){let b=[];return {bi
  rows.set(b[0],{value:b[1],at:b[2]});return {meta:{changes:1}};
  }}}}}
 const DB=db();let repaired=[],modelCalls=0,mail=[];
-const env={DB,AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(args.max_tokens,64);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
+const env={DB,AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(model,'@cf/ibm-granite/granite-4.0-h-micro');assert.equal(args.max_tokens,64);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
 let debug=healthy;
 const a={readDebug:async job=>debug[job],repair:async job=>repaired.push(job)};
 assert.equal((await run(env,a,'check',now)).state,'ok');
@@ -39,3 +39,18 @@ assert.equal((await notify({...env,AUTOPILOT_ALERTS_ENABLED:undefined},{jobs:['n
 assert.equal(mail.length,mailBeforeHold); // No scheduled send before readiness is explicitly enabled.
 const fail={...env,AI:{async run(){throw Error('quota')}}};await run(fail,a,'daily',now+86400000);assert.equal(JSON.parse(DB.rows.get('daily').value).state,'fallback');
 console.log('Autopilot: classification, calendar, schema validation, lock/cooldown, bounded repairs, dedup/recovery, mail recipients, model cap/fallback and kill switch passed');
+
+assert.equal(JSON.parse(DB.rows.get('daily').value).reason,'model_request_failed');
+const cases=[
+ [undefined,'ai_binding_missing'],
+ [{async run(){return {response:'not JSON'}}},'model_response_invalid'],
+ [{async run(){return {response:'{"palette":"evil","density":"standard"}'}}},'model_response_invalid'],
+ [{async run(){throw Error('private provider text must not be stored')}},'model_request_failed']
+];
+for(let i=0;i<cases.length;i++){
+ const [AI,reason]=cases[i];const result=await run({...env,AI},a,'daily',now+(i+2)*86400000);
+ assert.equal(result.state,'fallback');assert.equal(result.reason,reason);
+ assert.deepEqual(result.choice,{palette:'base',density:'standard'});
+ assert.ok(!JSON.stringify(result).includes('private provider text'));
+}
+console.log('Supported model ID, 64-token cap, missing binding/request/output diagnostics and private-error redaction passed');

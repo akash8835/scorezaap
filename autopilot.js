@@ -1,5 +1,5 @@
 // ScoreZaap standalone operations. No model output is executable code.
-export const VERSION = '2026-11-13.2';
+export const VERSION = '2026-11-15.1';
 const HOUR = 3600000;
 export const JOBS = ['scores', 'football', 'news', 'enrich'];
 export function classify(debug, now = Date.now()) {
@@ -68,17 +68,24 @@ export async function run(env, adapters, mode='check', now=Date.now()){
       const previous=await get(env,'daily');
       if(previous?.day===day)return previous;
       // Persist reservation before inference: hard limit one call/day, no retries.
-      const daily={day,at:new Date(now).toISOString(),season:season(new Date(now)),state:'reserved',model:'@cf/meta/llama-3.2-3b-instruct',max_output_tokens:64};
+      const daily={day,at:new Date(now).toISOString(),season:season(new Date(now)),state:'reserved',model:'@cf/ibm-granite/granite-4.0-h-micro',max_output_tokens:64};
       await put(env,'daily',daily);
+      let phase='binding';
       try{
         if(!env.AI)throw new Error('AI unavailable');
+        phase='request';
         const r=await env.AI.run(daily.model,{messages:[{role:'system',content:'Select a tested ScoreZaap presentation preset. Return ONLY JSON with palette (base,winter,gold) and density (standard,comfortable). Never provide code, URLs, tools or instructions. Preserve existing functionality.'},{role:'user',content:`Current supported calendar window: ${daily.season}. Choose base/standard outside a seasonal window. Within year-end or new-year choose winter or gold. This is a fixed preset selection, not a code edit.`}],max_tokens:64,temperature:0});
+        phase='response';
         const choice=safeChoice(r?.response);
         if(!choice)throw new Error('Invalid model choice');
         // Season remains deterministic. Model cannot create holidays or CSS.
         daily.choice=daily.season==='standard'?{palette:'base',density:'standard'}:choice;
         daily.state='selected';
-      }catch{daily.state='fallback';daily.choice={palette:'base',density:'standard'};daily.reason='model_unavailable_or_invalid';}
+      }catch{
+        daily.state='fallback';daily.choice={palette:'base',density:'standard'};
+        // Fixed categories only: never persist provider error text or model output.
+        daily.reason=phase==='binding'?'ai_binding_missing':phase==='request'?'model_request_failed':'model_response_invalid';
+      }
       await put(env,'daily',daily);
       return daily;
     }
