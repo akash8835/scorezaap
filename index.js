@@ -3584,7 +3584,8 @@ function hero(d){
  let sb='';
  const h=d.homeCrest||(d.home&&d.home.logo),a=d.awayCrest||(d.away&&d.away.logo);
  const score=d.bigScore||d.fullTime||(d.scores&&d.scores[0]?d.scores[0].value:null);
- if((h||a)&&SPORT!=='cricket'){sb='<div class="scoreblock"><img src="'+esc(h||'')+'" onerror="this.remove()"><span class="bigscore">'+esc(score||'vs')+'</span><img src="'+esc(a||'')+'" onerror="this.remove()"></div>'}
+ // Crests are optional provider metadata, never a requirement to show a score.
+ if((score||h||a)&&SPORT!=='cricket'){sb='<div class="scoreblock">'+(h?'<img src="'+esc(h)+'" onerror="this.remove()">':'')+'<span class="bigscore">'+esc(score||'vs')+'</span>'+(a?'<img src="'+esc(a)+'" onerror="this.remove()">':'')+'</div>'}
  const bits=(d.title||'').split(', ');
  const main=bits.shift();
  return '<div class="hero '+SPORT+' fadeup"><button class="sharebtn" onclick="shareMatch()" title="Share">\u2197\uFE0E Share</button><div class="mtitle">'+esc(main)+'</div>'+(bits.length?'<div class="msub">'+esc(bits.join(', '))+'</div>':'')+sb+enrichStrip(d)+'<div class="status '+cls+'">'+esc(txt)+'</div></div>';
