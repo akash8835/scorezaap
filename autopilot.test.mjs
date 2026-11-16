@@ -21,7 +21,7 @@ function db(){const rows=new Map();return {rows,prepare(sql){let b=[];return {bi
  rows.set(b[0],{value:b[1],at:b[2]});return {meta:{changes:1}};
  }}}}}
 const DB=db();let repaired=[],modelCalls=0,mail=[];
-const env={DB,AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(model,'@cf/ibm-granite/granite-4.0-h-micro');assert.equal(args.max_tokens,64);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
+const env={DB,AUTOPILOT_ALERTS_ENABLED:'true',AUTOPILOT_EMAIL_TO:'owner@example.test',AUTOPILOT_EMAIL_CC:'copy@example.test',AUTOPILOT_EMAIL_FROM:'alerts@example.test',AI:{async run(model,args){modelCalls++;assert.equal(model,'@cf/ibm-granite/granite-4.0-h-micro');assert.equal(args.max_tokens,128);return {response:'{"palette":"winter","density":"standard"}'}}},AUTOPILOT_EMAIL:{async send(v){mail.push(v);return {messageId:'message-1'}}}};
 let debug=healthy;
 const a={readDebug:async job=>debug[job],repair:async job=>repaired.push(job)};
 assert.equal((await run(env,a,'check',now)).state,'ok');
@@ -53,4 +53,11 @@ for(let i=0;i<cases.length;i++){
  assert.deepEqual(result.choice,{palette:'base',density:'standard'});
  assert.ok(!JSON.stringify(result).includes('private provider text'));
 }
-console.log('Supported model ID, 64-token cap, missing binding/request/output diagnostics and private-error redaction passed');
+console.log('Supported model ID, 128-token cap, missing binding/request/output diagnostics and private-error redaction passed');
+
+const capped=await run({...env,AI:{async run(){return {response:'private truncated output',usage:{completion_tokens:128}}}}},a,'daily',now+9*86400000);
+assert.equal(capped.reason,'model_response_invalid');
+assert.equal(capped.response_type,'string');assert.equal(capped.response_chars,24);
+assert.equal(capped.output_tokens,128);assert.equal(capped.output_cap_reached,true);
+assert.ok(!JSON.stringify(capped).includes('private truncated output'));
+console.log('Bounded response shape/count diagnostics, token-cap detection and raw-output redaction passed');

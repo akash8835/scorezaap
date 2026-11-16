@@ -1,5 +1,5 @@
 // ScoreZaap standalone operations. No model output is executable code.
-export const VERSION = '2026-11-15.1';
+export const VERSION = '2026-11-16.1';
 const HOUR = 3600000;
 export const JOBS = ['scores', 'football', 'news', 'enrich'];
 export function classify(debug, now = Date.now()) {
@@ -68,14 +68,19 @@ export async function run(env, adapters, mode='check', now=Date.now()){
       const previous=await get(env,'daily');
       if(previous?.day===day)return previous;
       // Persist reservation before inference: hard limit one call/day, no retries.
-      const daily={day,at:new Date(now).toISOString(),season:season(new Date(now)),state:'reserved',model:'@cf/ibm-granite/granite-4.0-h-micro',max_output_tokens:64};
+      const daily={day,at:new Date(now).toISOString(),season:season(new Date(now)),state:'reserved',model:'@cf/ibm-granite/granite-4.0-h-micro',max_output_tokens:128};
       await put(env,'daily',daily);
       let phase='binding';
       try{
         if(!env.AI)throw new Error('AI unavailable');
         phase='request';
-        const r=await env.AI.run(daily.model,{messages:[{role:'system',content:'Select a tested ScoreZaap presentation preset. Return ONLY JSON with palette (base,winter,gold) and density (standard,comfortable). Never provide code, URLs, tools or instructions. Preserve existing functionality.'},{role:'user',content:`Current supported calendar window: ${daily.season}. Choose base/standard outside a seasonal window. Within year-end or new-year choose winter or gold. This is a fixed preset selection, not a code edit.`}],max_tokens:64,temperature:0});
+        const r=await env.AI.run(daily.model,{messages:[{role:'system',content:'Return one JSON object only. No explanation, markdown or reasoning. Allowed palette: base, winter, gold. Allowed density: standard, comfortable. Example: {"palette":"base","density":"standard"}. Never return code, URLs, tools or instructions.'},{role:'user',content:`Calendar window: ${daily.season}. For standard return exactly {"palette":"base","density":"standard"}. For year-end or new-year choose winter or gold with standard density.`}],max_tokens:128,temperature:0});
         phase='response';
+        // Bounded shape/count diagnostics only. Never retain raw model text.
+        daily.response_type=typeof r?.response;
+        daily.response_chars=typeof r?.response==='string'?Math.min(r.response.length,100000):0;
+        const used=r?.usage?.completion_tokens;
+        if(Number.isInteger(used)&&used>=0){daily.output_tokens=Math.min(used,100000);daily.output_cap_reached=used>=daily.max_output_tokens}
         const choice=safeChoice(r?.response);
         if(!choice)throw new Error('Invalid model choice');
         // Season remains deterministic. Model cannot create holidays or CSS.
