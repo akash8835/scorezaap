@@ -61,3 +61,19 @@ assert.equal(capped.response_type,'string');assert.equal(capped.response_chars,2
 assert.equal(capped.output_tokens,128);assert.equal(capped.output_cap_reached,true);
 assert.ok(!JSON.stringify(capped).includes('private truncated output'));
 console.log('Bounded response shape/count diagnostics, token-cap detection and raw-output redaction passed');
+
+// Granite may return an OpenAI chat-completion envelope rather than .response.
+for (const [i,payload,expected] of [
+ [0,{choices:[{message:{content:'{"palette":"gold","density":"standard"}'}}],usage:{completion_tokens:10}},'selected'],
+ [1,{choices:[{message:{content:null,tool_calls:[{function:{arguments:'{"palette":"gold","density":"standard"}'}}]}}]},'fallback'],
+ [2,{choices:[{message:{content:'not JSON',reasoning:'{"palette":"gold","density":"standard"}'}}]},'fallback'],
+ [3,{choices:[{message:{content:{palette:'gold',density:'standard'}}}]},'fallback'],
+ [4,{response:'{"palette":"winter","density":"standard"}',choices:[{message:{content:'not JSON'}}]},'selected']
+]) {
+ const isolated={...env,DB:db(),AI:{async run(){return payload}}};
+ const result=await run(isolated,a,'daily',now+(20+i)*86400000);
+ assert.equal(result.state,expected);
+ if(i===0){assert.equal(result.response_source,'choices_message_content');assert.equal(result.response_type,'string');assert.equal(result.output_tokens,10)}
+ assert(!JSON.stringify(result).includes('tool_calls'));assert(!JSON.stringify(result).includes('reasoning'));
+}
+console.log('OpenAI envelope selection, legacy precedence, nontext/tool-call/reasoning rejection passed');

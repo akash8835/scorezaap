@@ -1,5 +1,5 @@
 // ScoreZaap standalone operations. No model output is executable code.
-export const VERSION = '2026-11-16.1';
+export const VERSION = '2026-11-17.1';
 const HOUR = 3600000;
 export const JOBS = ['scores', 'football', 'news', 'enrich'];
 export function classify(debug, now = Date.now()) {
@@ -77,11 +77,14 @@ export async function run(env, adapters, mode='check', now=Date.now()){
         const r=await env.AI.run(daily.model,{messages:[{role:'system',content:'Return one JSON object only. No explanation, markdown or reasoning. Allowed palette: base, winter, gold. Allowed density: standard, comfortable. Example: {"palette":"base","density":"standard"}. Never return code, URLs, tools or instructions.'},{role:'user',content:`Calendar window: ${daily.season}. For standard return exactly {"palette":"base","density":"standard"}. For year-end or new-year choose winter or gold with standard density.`}],max_tokens:128,temperature:0});
         phase='response';
         // Bounded shape/count diagnostics only. Never retain raw model text.
-        daily.response_type=typeof r?.response;
-        daily.response_chars=typeof r?.response==='string'?Math.min(r.response.length,100000):0;
+        // Accept text only from the two supported envelopes, never tool calls/reasoning.
+        const raw=typeof r?.response==='string'?r.response:r?.choices?.[0]?.message?.content;
+        daily.response_source=typeof r?.response==='string'?'response':typeof raw==='string'?'choices_message_content':'missing';
+        daily.response_type=typeof raw;
+        daily.response_chars=typeof raw==='string'?Math.min(raw.length,100000):0;
         const used=r?.usage?.completion_tokens;
         if(Number.isInteger(used)&&used>=0){daily.output_tokens=Math.min(used,100000);daily.output_cap_reached=used>=daily.max_output_tokens}
-        const choice=safeChoice(r?.response);
+        const choice=safeChoice(raw);
         if(!choice)throw new Error('Invalid model choice');
         // Season remains deterministic. Model cannot create holidays or CSS.
         daily.choice=daily.season==='standard'?{palette:'base',density:'standard'}:choice;
