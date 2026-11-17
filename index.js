@@ -149,6 +149,13 @@ function szSameValue(a,b) {
  } catch {}
  return false;
 }
+// D1 does not enforce KV TTLs. Reclaim only entries already invisible to readers.
+// Small batches keep maintenance bounded and preserve all valid/permanent data.
+async function szPruneExpiredCache(env, now = Date.now()) {
+ if (!env.DB) return 0;
+ const result = await env.DB.prepare("DELETE FROM sz_kv_cache WHERE key IN (SELECT key FROM sz_kv_cache WHERE expires_at > 0 AND expires_at <= ? LIMIT 100)").bind(now).run();
+ return result.meta?.changes || 0;
+}
 function szQuotaEnv(env) {
  if(!env.DB || !env.SPORTS_KV) return env;
  if(szWrappedEnvs.has(env)) return szWrappedEnvs.get(env);
@@ -6604,6 +6611,11 @@ ${snapshot}${liveSc}` },
     }, "dbg");
     const job = footballCron ? () => refresh("football", env, ctx) : slot === 0 ? () => refresh("all", env, ctx) : slot === 2 ? () => szAutoRun(env) : () => szEnrichRun(env);
     ctx.waitUntil((async () => {
+      try {
+        await szPruneExpiredCache(env);
+      } catch (e) {
+        console.error("cache expiry maintenance failed");
+      }
       await dbg("start");
       try {
         const info = await job();
