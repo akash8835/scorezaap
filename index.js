@@ -3985,6 +3985,14 @@ function applyMiniScore(lm, s) {
     if (JSON.stringify(sorted) !== JSON.stringify(cur)) changed = true;
     if (changed) lm.scores = sorted;
   }
+  // A stale preview/toss list flag must not hide a match once its scorecard
+  // contains played innings. Zeroed pre-match placeholders are not evidence.
+  const played = Array.isArray(s.innings) && s.innings.some(i =>
+    Number(i.runs) > 0 || Number(i.wkts) > 0 || Number(i.overs) > 0);
+  if (!s.complete && played && lm.status === "upcoming") {
+    lm.status = "live";
+    changed = true;
+  }
   if (s.complete) {
     if (lm.status !== "finished") {
       lm.status = "finished";
@@ -3996,6 +4004,12 @@ function applyMiniScore(lm, s) {
     }
   } else if (s.status && lm.statusText !== s.status && !/^live now$/i.test(s.status)) {
     lm.statusText = s.status;
+    changed = true;
+  }
+  if (!s.complete && played && lm.status === "live" &&
+      /opt(ed)? to (bat|bowl)|won the toss/i.test(lm.statusText || "") &&
+      !/session|stumps|break|rain|delay|needs? \d|trails? by|leads? by/i.test(lm.statusText || "")) {
+    lm.statusText = "Live now";
     changed = true;
   }
   return changed;
