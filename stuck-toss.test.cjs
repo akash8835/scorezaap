@@ -16,6 +16,7 @@ const gEnd=src.indexOf('          const acc2 =',gStart);
 assert.ok(gStart>0&&gEnd>gStart,'guard block not found');
 const GUARD=src.slice(gStart,gEnd);
 const c=vm.createContext({console:{log:()=>{}},Date,__name:f=>f,__name2:f=>f,__name22:f=>f,__name222:f=>f,__name2222:f=>f,__name22222:f=>f,__name222222:f=>f,__name2222222:f=>f,__name22222222:f=>f});
+vm.runInContext(src.slice(0,src.indexOf('// Live detail')),c);
 vm.runInContext(sliceFn('szCricketStuckAfterMs','async function szLiveOverlay'),c);
 vm.runInContext(sliceFn('czTeamKey','function czFixtureTeams'),c);
 vm.runInContext(sliceFn('czFixtureTeams','function czMatchNo'),c);

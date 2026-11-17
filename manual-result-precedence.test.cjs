@@ -14,6 +14,7 @@ function slice(start, next) {
   return src.slice(a, b);
 }
 const c = vm.createContext({ console: { log: () => {} }, Date, JSON });
+vm.runInContext(src.slice(0,src.indexOf('// Live detail')),c);
 vm.runInContext(slice('var SZ_MANUAL_CRICKET_RESULTS', 'async function szLiveOverlay'), c);
 assert.equal(typeof c.szApplyManualCricketResults, 'function', 'helper missing');
 assert.equal(typeof c.szManualCricketResult, 'function', 'lookup missing');

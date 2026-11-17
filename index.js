@@ -1,3 +1,8 @@
+// A provider's header complete flag can mean the innings ended, not the
+// match. Explicit innings-break text overrides that contradictory flag.
+function szCricketInningsBreak(text) {
+  return /\binnings?\s+break\b/i.test(String(text || ""));
+}
 // Live detail must never regress to an older fallback scorecard.
 // Cricbuzz's list feed counts the ball that finishes an over as ".6"
 // (6.6 = 7 overs, 79.6 = 80). Normalize only that exact shape; standard
@@ -11,7 +16,7 @@ function szCbzListOvers(o) {
 // next day start. Keep every stumps match in the work list even when more
 // than eight matches are live, instead of letting it age out of the slice.
 function szCronMiniWorklist(matches, now = Date.now()) {
-  const pool = (matches || []).filter((x) => String(x.id).startsWith("cbz_") && x.status !== "finished" && (!x.start || new Date(x.start).getTime() <= now))
+  const pool = (matches || []).filter((x) => String(x.id).startsWith("cbz_") && (x.status !== "finished" || szCricketInningsBreak(x.statusText)) && (!x.start || new Date(x.start).getTime() <= now))
     .sort((a, b) => String(b.start || "").localeCompare(String(a.start || "")));
   const work = pool.slice(0, 8);
   // A hand-verified result must always reach the worklist, even when newer
@@ -470,6 +475,11 @@ function szManualCricketResult(id) {
 function szApplyManualCricketResults(matches) {
   let changed = false;
   for (const m of matches || []) {
+    // Repair saved false-final flags so the overlay/cron keeps checking.
+    if (m && m.status === "finished" && szCricketInningsBreak(m.statusText)) {
+      m.status = "live";
+      changed = true;
+    }
     const r = m ? szManualCricketResult(m.id) : null;
     if (!r) continue;
     const scores = r.scores.map((s) => ({ ...s }));
@@ -2046,7 +2056,7 @@ async function cbzScorecard(env, cricketId, title, startIso, live) {
   }
   const ck = "sc_c_" + cricketId;
   const hit = env.SPORTS_KV ? await env.SPORTS_KV.get(ck, "json") : null;
-  if (hit) return hit;
+  if (hit && !szCricketInningsBreak(hit.status)) return hit;
   if (String(cricketId).indexOf("cbz_") === 0) {
     const hs = await cbzMiniScorecardFetch(String(cricketId).slice(4)).catch(() => null);
     if (hs && Array.isArray(hs.innings) && hs.innings.length) {
@@ -3871,7 +3881,7 @@ function cbzMiniScorecard(d) {
   }).filter((i) => i.team && i.runs != null);
   if (!innings.length) return null;
   const mh = d.matchHeader || {};
-  return { status: d.status || mh.status || null, complete: !!d.isMatchComplete || !!d.matchComplete || !!mh.complete || mh.state === "Complete", innings };
+  return { status: d.status || mh.status || null, complete: !szCricketInningsBreak(d.status) && !szCricketInningsBreak(mh.status) && !szCricketInningsBreak(mh.state) && (!!d.isMatchComplete || !!d.matchComplete || !!mh.complete || mh.state === "Complete"), innings };
 }
 __name(cbzMiniScorecard, "cbzMiniScorecard");
 __name2(cbzMiniScorecard, "cbzMiniScorecard");
@@ -3989,7 +3999,8 @@ function applyMiniScore(lm, s) {
   // contains played innings. Zeroed pre-match placeholders are not evidence.
   const played = Array.isArray(s.innings) && s.innings.some(i =>
     Number(i.runs) > 0 || Number(i.wkts) > 0 || Number(i.overs) > 0);
-  if (!s.complete && played && lm.status === "upcoming") {
+  if (!s.complete && played && (lm.status === "upcoming" ||
+      lm.status === "finished" && szCricketInningsBreak(lm.statusText))) {
     lm.status = "live";
     changed = true;
   }
@@ -6258,6 +6269,9 @@ var index_default = {
             } catch (e) {
             }
           }
+          if (szCricketInningsBreak(cached.status)) {
+            cached = { ...cached, ended: false, winner: null };
+          }
           const liveNow = cached.started && !cached.ended;
           let [scorecard, comm] = await Promise.all([
             cbzScorecard(env, id, cached.title, cached.date, liveNow).catch(() => null),
@@ -6295,7 +6309,7 @@ var index_default = {
               // A hand-verified result outranks a stale list reading here too.
               if (cl && Array.isArray(cl.matches)) szApplyManualCricketResults(cl.matches);
               const lm2 = cl && Array.isArray(cl.matches) ? cl.matches.find((m) => m.id === id) : null;
-              if (lm2 && lm2.status === "finished" && Array.isArray(lm2.scores) && lm2.scores.length) {
+              if (lm2 && lm2.status === "finished" && !szCricketInningsBreak(lm2.statusText) && Array.isArray(lm2.scores) && lm2.scores.length) {
   const finalInnings = lm2.scores.map((s) => {
     const pm = /^(\d+)\/(\d+)\s*\((\d+\.?\d*)\)$/.exec(String(s.value || ""));
     return pm ? { inning: s.inning || "", r: +pm[1], w: +pm[2], o: +pm[3] } : null;
