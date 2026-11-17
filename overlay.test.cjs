@@ -8,7 +8,7 @@ function mk(script){
   const c=vm.createContext({console:{error:s=>logs.push(JSON.parse(s))},__name2:(f)=>f,ESPN_API:'x',ESPN_SPORTS:[],Date,
     szFastJson:async(u)=>{calls.push(u);const r=script.shift();return r===undefined?null:r},
     cbzMiniScorecard:d=>d&&d.mini,
-    applyMiniScore:(m,s)=>{m.scores=s.innings.map(i=>({inning:i.team,value:`${i.runs}/${i.wkts} (${i.overs})`}));return true}});
+    applyMiniScore:(m,s)=>{if(s.status)m.statusText=s.status;m.scores=s.innings.map(i=>({inning:i.team,value:`${i.runs}/${i.wkts} (${i.overs})`}));return true}});
   vm.runInContext(head,c);vm.runInContext(fn,c);return {c,logs,calls};
 }
 const mini=(r,w,o)=>({mini:{innings:[{team:'BAN 1',runs:r,wkts:w,overs:o,batsmen:[]}]}});
@@ -36,5 +36,9 @@ const match=(v,extra)=>({id:'cbz_1',status:'live',start:'2020-01-01T00:00:00Z',s
  // 7 new innings (more innings) is not treated as older
  t=mk([{mini:{innings:[{team:'BAN 1',runs:300,wkts:10,overs:90,batsmen:[]},{team:'WI 1',runs:5,wkts:0,overs:2,batsmen:[]}]}}]);m=match('300/10 (90)');await t.c.szLiveOverlay({matches:[m]},{matches:[]},{});
  assert.equal(m.scores.length,2);assert.ok(!m.scoreDelayed);n++;
+ // A stale toss list must not replace a scorecard's verified session text.
+ t=mk([{mini:{status:'Day 1: 2nd Session - Pakistan opt to bowl',innings:[{team:'SL',runs:86,wkts:7,overs:30.1,batsmen:[]}]}}]);
+ m=match('85/7 (29.3)',{statusText:'Pakistan opt to bowl'});await t.c.szLiveOverlay({matches:[m]},{matches:[]},{});
+ assert.equal(m.statusText,'Day 1: 2nd Session - Pakistan opt to bowl');n++;
  console.log(n+' overlay failure-path tests passed');
 })().catch(e=>{console.error(e);process.exit(1)});

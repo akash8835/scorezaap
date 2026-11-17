@@ -513,7 +513,7 @@ async function szLiveOverlay(c2, f2, espnBlobs) {
         if (Array.isArray(s.innings) && s.innings.length) m.scores = [];
         applyMiniScore(m, s);
         if (!Array.isArray(m.scores) || !m.scores.length) m.scores = prevScores;
-        if (m.status !== "finished" && prevText && /opt(ed)? to (bat|bowl)|won the toss/i.test(m.statusText || "")) m.statusText = prevText;
+        if (m.status !== "finished" && prevText && /opt(ed)? to (bat|bowl)|won the toss/i.test(m.statusText || "") && !/session|stumps|break|rain|delay/i.test(m.statusText || "")) m.statusText = prevText;
       }
     })());
   }
