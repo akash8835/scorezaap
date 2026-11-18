@@ -18,6 +18,8 @@ assert.ok(gStart>0&&gEnd>gStart,'frozen-live block not found');
 const GUARD=src.slice(gStart,gEnd);
 const c=vm.createContext({console:{log:()=>{}},Date,__name:f=>f,__name2:f=>f,__name22:f=>f,__name222:f=>f,__name2222:f=>f,__name22222:f=>f,__name222222:f=>f,__name2222222:f=>f,__name22222222:f=>f});
 vm.runInContext(sliceFn('szCricketStuckAfterMs','async function szLiveOverlay'),c);
+// Keep the regression fixture inside its intended active window as time passes.
+c.SZ_MANUAL_CRICKET_RESULTS.cbz_176496.start=new Date(Date.now()-24*36e5).toISOString();
 let n=0;
 async function run({lm,sc2}){
   const ctx={lm,sc2};

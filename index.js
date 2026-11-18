@@ -5501,7 +5501,10 @@ var index_default = {
       if (path.endsWith("/status")) return json(await autopilot.status(env),200,{"Cache-Control":"no-store"});
       if(request.method!=="POST")return json({error:"method not allowed"},405);
       const mode=url.searchParams.get("mode")==="daily"?"daily":"check";
-      const result=await autopilot.run(env, szAutopilotAdapters(env,ctx),mode);
+      const execution=autopilot.run(env, szAutopilotAdapters(env,ctx),mode);
+      // Finish the bounded planner and its state write if the caller leaves.
+      ctx.waitUntil(execution.catch(() => {}));
+      const result=await execution;
       return json(result,200,{"Cache-Control":"no-store"});
     }
     if (path === "/api/automation-health") {

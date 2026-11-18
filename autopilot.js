@@ -1,5 +1,5 @@
 // ScoreZaap standalone operations. No model output is executable code.
-export const VERSION = '2026-11-17.1';
+export const VERSION = '2026-11-18.1';
 const HOUR = 3600000;
 export const JOBS = ['scores', 'football', 'news', 'enrich'];
 export function classify(debug, now = Date.now()) {
@@ -63,6 +63,14 @@ export async function run(env, adapters, mode='check', now=Date.now()){
   if(!await lock(env,now))return {version:VERSION,state:'busy'};
   try{
     const old=await get(env,'state')||{};
+    // A terminated invocation must not leave yesterday's reservation looking
+    // active forever. Settle only after the lock's full ten-minute lifetime,
+    // under that same lock, without releasing the once/day reservation.
+    const abandoned=await get(env,'daily');
+    const reservedAt=Date.parse(abandoned?.at||'');
+    if(abandoned?.state==='reserved'&&Number.isFinite(reservedAt)&&now-reservedAt>=10*60000){
+      await put(env,'daily',{...abandoned,state:'fallback',choice:{palette:'base',density:'standard'},reason:'model_run_incomplete'});
+    }
     if(mode==='daily'){
       const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
       const previous=await get(env,'daily');
@@ -70,11 +78,11 @@ export async function run(env, adapters, mode='check', now=Date.now()){
       // Persist reservation before inference: hard limit one call/day, no retries.
       const daily={day,at:new Date(now).toISOString(),season:season(new Date(now)),state:'reserved',model:'@cf/ibm-granite/granite-4.0-h-micro',max_output_tokens:128};
       await put(env,'daily',daily);
-      let phase='binding';
+      let phase='binding',timer,timedOut=false;
       try{
         if(!env.AI)throw new Error('AI unavailable');
         phase='request';
-        const r=await env.AI.run(daily.model,{messages:[{role:'system',content:'Return one JSON object only. No explanation, markdown or reasoning. Allowed palette: base, winter, gold. Allowed density: standard, comfortable. Example: {"palette":"base","density":"standard"}. Never return code, URLs, tools or instructions.'},{role:'user',content:`Calendar window: ${daily.season}. For standard return exactly {"palette":"base","density":"standard"}. For year-end or new-year choose winter or gold with standard density.`}],max_tokens:128,temperature:0});
+        const r=await Promise.race([env.AI.run(daily.model,{messages:[{role:'system',content:'Return one JSON object only. No explanation, markdown or reasoning. Allowed palette: base, winter, gold. Allowed density: standard, comfortable. Example: {"palette":"base","density":"standard"}. Never return code, URLs, tools or instructions.'},{role:'user',content:`Calendar window: ${daily.season}. For standard return exactly {"palette":"base","density":"standard"}. For year-end or new-year choose winter or gold with standard density.`}],max_tokens:128,temperature:0}),new Promise((_,reject)=>{timer=setTimeout(()=>{timedOut=true;reject(new Error('model deadline'))},15000)})]);
         phase='response';
         // Bounded shape/count diagnostics only. Never retain raw model text.
         // Accept text only from the two supported envelopes, never tool calls/reasoning.
@@ -92,8 +100,9 @@ export async function run(env, adapters, mode='check', now=Date.now()){
       }catch{
         daily.state='fallback';daily.choice={palette:'base',density:'standard'};
         // Fixed categories only: never persist provider error text or model output.
-        daily.reason=phase==='binding'?'ai_binding_missing':phase==='request'?'model_request_failed':'model_response_invalid';
-      }
+        daily.reason=timedOut?'model_request_timeout':phase==='binding'?'ai_binding_missing':phase==='request'?'model_request_failed':'model_response_invalid';
+        if(timedOut)daily.timeout_ms=15000;
+      }finally{if(timer!==undefined)clearTimeout(timer)}
       await put(env,'daily',daily);
       return daily;
     }
