@@ -668,9 +668,10 @@ async function cbzFreeList() {
     }
   }, "get");
   const [home, ls] = await Promise.all([get("https://m.cricbuzz.com/api/home"), get("https://www.cricbuzz.com/cricket-match/live-scores")]);
-  const matches = cbzExtractMatches(home).concat(cbzExtractMatches(ls));
+  const fullList = cbzExtractMatches(ls);
+  const matches = cbzExtractMatches(home).concat(fullList);
   console.log("cbz free list:", matches.length, "matches");
-  return matches.length ? { typeMatches: [{ seriesMatches: [{ matches }] }] } : null;
+  return matches.length ? { coverageComplete: fullList.length > 0, typeMatches: [{ seriesMatches: [{ matches }] }] } : null;
 }
 __name(cbzFreeList, "cbzFreeList");
 __name2(cbzFreeList, "cbzFreeList");
@@ -694,6 +695,18 @@ function szRepairSplicedName(s) {
 }
 __name(szRepairSplicedName, "szRepairSplicedName");
 __name2(szRepairSplicedName, "szRepairSplicedName");
+// The homepage is only a small featured subset. A failed full-list request
+// must not erase the saved fixture coverage. Keep its timestamp unchanged
+// so the next ordinary refresh tries again. A successful full list may
+// legitimately shrink; this guard does not infer completeness from counts.
+function szCbzSliceCandidate(previous, matches, now) {
+  if (!matches || !matches.length) return previous;
+  if (matches.coverageComplete === false && previous?.matches?.length) {
+    console.log("cricket cbz partial coverage retained prior slice");
+    return previous;
+  }
+  return { at: now, matches };
+}
 async function fetchCricketCbz(env) {
   let live = await cbzFreeList().catch(() => null);
   let up = null;
@@ -750,7 +763,9 @@ async function fetchCricketCbz(env) {
   eat(up, false);
   const rank = /* @__PURE__ */ __name2222222((m) => m.status === "live" ? 0 : m.status === "upcoming" ? 1 : 2, "rank");
   out.sort((a, b) => rank(a) - rank(b) || String(a.start || "").localeCompare(String(b.start || "")));
-  return out.slice(0, 60);
+  const result = out.slice(0, 60);
+  result.coverageComplete = live?.coverageComplete !== false;
+  return result;
 }
 __name(fetchCricketCbz, "fetchCricketCbz");
 __name2(fetchCricketCbz, "fetchCricketCbz");
@@ -1559,10 +1574,11 @@ async function refresh(kind, env, ctx) {
     const sliceStale = !cbzSlice || !cbzSlice.at || Date.now() - +cbzSlice.at > 5 * 6e4;
     if (sliceStale && kv) {
       const fb = await fetchCricketCbz(env).catch(() => null);
-      if (fb && fb.length) {
-        cbzSlice = { at: Date.now(), matches: fb };
+      const nextSlice = szCbzSliceCandidate(cbzSlice, fb, Date.now());
+      if (nextSlice && nextSlice !== cbzSlice) {
+        cbzSlice = nextSlice;
         await kv.put("cricket_cbz", JSON.stringify(cbzSlice));
-        console.log("cricket cbz slice refreshed:", fb.length, "matches");
+        console.log("cricket cbz slice refreshed:", cbzSlice.matches.length, "matches");
       }
     }
     const cricRaw = Array.isArray(cricket) ? cricket : [];
