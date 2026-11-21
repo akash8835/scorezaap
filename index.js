@@ -140,8 +140,10 @@ function szLogAiFailure(error) {
 // KV quota fix: TTL caches and request bookkeeping use existing D1.
 const SZ_STORE_REV = "kv-d1-20261004";
 const szWrappedEnvs = new WeakMap();
+// The latest notification is disposable too: simultaneous match transitions
+// otherwise write the same KV key repeatedly and hit its per-key rate limit.
 function szTransientKey(k) {
- return /^(?:cbz_budget_|cbz_rl$|cbz_map$|cbz_fb_at$|tap_v3_|chat_rl_|chat_day_|sc_c_|comm_c|md_c_|md_cb_|md_f_|wx2_|sq_|ovr_|ser_|rank_|player_|fd_|espn_sb_|espn_sum_|espn_gsum_)/.test(k) || k === "cricket_cbz" || k === "series_map";
+ return /^(?:cbz_budget_|cbz_rl$|cbz_map$|cbz_fb_at$|tap_v3_|chat_rl_|chat_day_|sc_c_|comm_c|md_c_|md_cb_|md_f_|wx2_|sq_|ovr_|ser_|rank_|player_|fd_|espn_sb_|espn_sum_|espn_gsum_)/.test(k) || k === "cricket_cbz" || k === "series_map" || k === "notify_latest";
 }
 function szSameValue(a,b) {
  if(a===b) return true;
