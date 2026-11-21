@@ -3897,7 +3897,15 @@ function cbzMiniScorecard(d) {
   }).filter((i) => i.team && i.runs != null);
   if (!innings.length) return null;
   const mh = d.matchHeader || {};
-  return { status: d.status || mh.status || null, complete: !szCricketInningsBreak(d.status) && !szCricketInningsBreak(mh.status) && !szCricketInningsBreak(mh.state) && (!!d.isMatchComplete || !!d.matchComplete || !!mh.complete || mh.state === "Complete"), innings };
+  const teams = [mh.team1?.name, mh.team2?.name].filter(Boolean);
+  const start = Number(mh.matchStartTimestamp);
+  const detail = {
+    title: teams.length === 2 ? teams.join(" vs ") : null,
+    date: Number.isFinite(start) && start > 0 ? new Date(start).toISOString() : null,
+    matchType: mh.matchFormat || null,
+    venue: [mh.venue?.name, mh.venue?.city].filter(Boolean).join(", ") || null
+  };
+  return { detail, status: d.status || mh.status || null, complete: !szCricketInningsBreak(d.status) && !szCricketInningsBreak(mh.status) && !szCricketInningsBreak(mh.state) && (!!d.isMatchComplete || !!d.matchComplete || !!mh.complete || mh.state === "Complete"), innings };
 }
 __name(cbzMiniScorecard, "cbzMiniScorecard");
 __name2(cbzMiniScorecard, "cbzMiniScorecard");
@@ -6240,7 +6248,7 @@ var index_default = {
                   cached.status = s3.result;
                   if (s3.finished) cached.winner = s3.result;
                 } else cached.status = "Live now";
-                cached.innings = (s3.scores.length === 2 ? [s3.scores[1], s3.scores[0]] : s3.scores).map((sc) => ({ inning: sc.team, r: sc.runs, w: sc.wkts, o: sc.overs != null ? sc.overs : cached.matchType === "T20" ? "20" : "50" }));
+                cached.innings = (s3.scores.length === 2 ? [s3.scores[1], s3.scores[0]] : s3.scores).map((sc) => ({ inning: sc.team, r: sc.runs, w: sc.wkts, o: sc.overs ?? null }));
               }
             }
             if (env.SPORTS_KV) await env.SPORTS_KV.put(key, JSON.stringify(cached), { expirationTtl: cached.ended ? 86400 : 120 });
@@ -6298,7 +6306,10 @@ var index_default = {
           ]);
           let scorecardStale = false;
           if (liveNow && scorecard && Array.isArray(scorecard.innings)) {
-            let reference = cached.innings || [];
+            // An unlisted fixture can have only a title-derived fallback.
+            // Older versions guessed 50 overs when the HTML omitted them.
+            // That is not verified progress and cannot veto a real scorecard.
+            let reference = cached.title === "Match" && !cached.date && !cached.matchType ? [] : cached.innings || [];
             const latestList = env.SPORTS_KV ? await env.SPORTS_KV.get("cricket", "json").catch(() => null) : null;
             const latestMatch = latestList && Array.isArray(latestList.matches) ? latestList.matches.find((m) => m.id === id) : null;
             const listInnings = szListCricketInnings(latestMatch);
@@ -6311,7 +6322,15 @@ var index_default = {
             }
           }
           if (scorecard && Array.isArray(scorecard.innings) && scorecard.innings.length) {
-            cached = { ...cached, status: scorecard.status || cached.status, ended: !!scorecard.complete, started: true, innings: scorecard.innings.map((i) => ({ inning: i.team, r: i.runs, w: i.wkts, o: i.overs })) };
+            const meta = scorecard.detail || {};
+            cached = { ...cached,
+              title: cached.title && cached.title !== "Match" ? cached.title : meta.title || cached.title,
+              venue: cached.venue || meta.venue || null,
+              date: cached.date || meta.date || null,
+              matchType: cached.matchType || meta.matchType || null,
+              status: scorecard.status || cached.status, ended: !!scorecard.complete, started: true,
+              winner: scorecard.complete ? scorecard.status || cached.winner : cached.winner,
+              innings: scorecard.innings.map((i) => ({ inning: i.team, r: i.runs, w: i.wkts, o: i.overs })) };
           }
           let graphs = null;
           try {
