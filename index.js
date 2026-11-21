@@ -762,7 +762,9 @@ async function fetchCricketCbz(env) {
   eat(live, true);
   eat(up, false);
   const rank = /* @__PURE__ */ __name2222222((m) => m.status === "live" ? 0 : m.status === "upcoming" ? 1 : 2, "rank");
-  out.sort((a, b) => rank(a) - rank(b) || String(a.start || "").localeCompare(String(b.start || "")));
+  // Keep the newest results in the bounded feed, not the oldest. The
+  // result publisher sees this same snapshot, so old-first starves finals.
+  out.sort((a, b) => rank(a) - rank(b) || (a.status === "finished" ? String(b.start || "").localeCompare(String(a.start || "")) : String(a.start || "").localeCompare(String(b.start || ""))));
   const result = out.slice(0, 60);
   result.coverageComplete = live?.coverageComplete !== false;
   return result;
@@ -1585,7 +1587,7 @@ async function refresh(kind, env, ctx) {
     if (cbzSlice && cbzSlice.matches && cbzSlice.matches.length) {
       cricket = dedupeCricket((cbzSlice.matches || []).concat(cricket || []));
       const rank2 = { live: 0, upcoming: 1, finished: 2 };
-      cricket.sort((a, b) => (rank2[a.status] != null ? rank2[a.status] : 1) - (rank2[b.status] != null ? rank2[b.status] : 1) || String(a.start || "").localeCompare(String(b.start || "")));
+      cricket.sort((a, b) => (rank2[a.status] != null ? rank2[a.status] : 1) - (rank2[b.status] != null ? rank2[b.status] : 1) || (a.status === "finished" ? String(b.start || "").localeCompare(String(a.start || "")) : String(a.start || "").localeCompare(String(b.start || ""))));
       cricket = cricket.slice(0, 60);
     }
     if (!cricket || !cricket.length) {
