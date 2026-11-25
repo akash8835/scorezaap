@@ -1016,6 +1016,7 @@ var FOOT_TEAM_ID = {
  "Real Racing Club de Santander": 87,
  "Real Sociedad de Fútbol": 89,
  "Rio Ave FC": 3822,
+ "Sabah FK": 21922,
  "SBV Excelsior": 2566,
  "SC Cambuur-Leeuwarden": 3736,
  "SC Corinthians Paulista": 874,
