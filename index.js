@@ -6359,10 +6359,11 @@ var index_default = {
   if (finalInnings.length) {
     cached = { ...cached, status: lm2.statusText || cached.status, ended: true, started: true, innings: finalInnings };
     if (scorecard && Array.isArray(scorecard.innings)) {
-      scorecard.innings = scorecard.innings.map((i, idx) => {
-        const f = finalInnings[idx];
-        return f ? { ...i, runs: f.r, wkts: f.w, overs: f.o } : i;
-      });
+      // Final list rows can be team-grouped while provider scorecard rows
+      // are chronological. Keep each provider innings with its own totals,
+      // batting and bowling figures. Positional totals corrupt other teams'
+      // innings, and even identity-matched newer totals would mix ages.
+      // The final list still supplies the summary above, never table totals.
       scorecard.complete = true;
       scorecard.status = lm2.statusText || scorecard.status;
     }
